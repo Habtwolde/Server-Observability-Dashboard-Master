@@ -1,0 +1,71 @@
+{
+  "report_title_template": "Server Health Assessment Report — {server_name}",
+  "docx_filename_template": "{server_name}_health_assessment_report.docx",
+
+  "tone": {
+    "voice": "senior SQL Server performance engineer",
+    "style": "technical, concise, executive-friendly",
+    "avoid": [
+      "speculation",
+      "unverifiable claims",
+      "inventing query text",
+      "inventing infrastructure details"
+    ]
+  },
+
+  "hard_rules": [
+    "Use ONLY the provided evidence JSON. If a metric/table is missing, write 'Not available in this snapshot' and continue.",
+    "Do not mention sheets by name in the report output.",
+    "Do not fabricate numbers, wait types, query names, or configuration values.",
+    "Prefer bullets over long paragraphs.",
+    "Keep recommendations action-oriented and verifiable."
+  ],
+
+  "section_order": [
+    "1. Executive Summary",
+    "2. Environment Overview",
+    "2.1 Infrastructure",
+    "2.2 Version and Patch Level",
+    "2.3 Key Configuration Settings",
+    "3. Observed Performance Characteristics",
+    "3.1 CPU and Wait Statistics",
+    "3.2 I/O and tempdb",
+    "3.3 Memory",
+    "3.4 Indexing and Query Patterns",
+    "3.5 High-Impact Workload Hotspots",
+    "4. Key Findings",
+    "5. Remediation Plan",
+    "6. Resource Optimization and Cost Strategy",
+    "7. Expected Outcomes",
+    "8. Conclusion"
+  ],
+
+  "tables": {
+    "configuration": {
+      "title": "Key Configuration Settings",
+      "headers": ["Setting", "Current Value"],
+      "max_rows": 12
+    },
+    "top_waits": {
+      "title": "Top Waits",
+      "headers": ["Wait Type", "% of Total Wait Time", "Interpretation"],
+      "max_rows": 10
+    },
+    "workload_hotspots": {
+      "title": "High-Impact Workload Hotspots",
+      "headers": ["Item", "Impact Metric", "Interpretation"],
+      "max_rows": 12
+    },
+    "rightsizing": {
+      "title": "Right-Sizing (Post-Fix Target)",
+      "headers": ["Environment", "CPU", "Memory"],
+      "max_rows": 3
+    }
+  },
+
+  "plan_format": {
+    "require_sections": true,
+    "require_tables": true,
+    "max_steps": 12
+  }
+}

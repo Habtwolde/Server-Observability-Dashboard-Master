@@ -1,0 +1,5 @@
+streamlit
+pandas
+databricks-sql-connector
+python-docx
+pypandoc

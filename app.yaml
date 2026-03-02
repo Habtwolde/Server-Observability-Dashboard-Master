@@ -1,0 +1,19 @@
+command: ["streamlit", "run", "app.py", "--server.port", "8000", "--server.address", "0.0.0.0"]
+
+env:
+  - name: PYTHONPATH
+    value: /app/python/source_code
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: "47bde9279fec4222"
+  - name: OBS_SERVERS_VIEW
+    value: v_latest_sql_diagnostics
+  - name: OBS_PERF_TABLE
+    value: sql_diagnostics_bronze
+  
+
+files:
+  - app.py
+  - db/
+  - services/
+  - ui/
+  - requirements.txt
