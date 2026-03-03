@@ -261,6 +261,13 @@ def render_expensive_queries_tab(selected_server: str) -> None:
                 else:
                     st.markdown(f"**LLM:** {content}")
 
+    # Handle clear action BEFORE the widget is instantiated (Streamlit restriction)
+    clear_flag = chat_key + "::clear_requested"
+    if st.session_state.get(clear_flag, False):
+        st.session_state[chat_key + "::history"] = []
+        st.session_state[chat_key + "::question"] = ""
+        st.session_state[clear_flag] = False
+
     q = st.text_area(
         "Ask a follow-up question about this query",
         placeholder="e.g., Can you propose the best index strategy and explain trade-offs?",
@@ -273,12 +280,10 @@ def render_expensive_queries_tab(selected_server: str) -> None:
         ask = st.button("Ask follow-up", key=chat_key + "::ask")
     with col_b:
         clear = st.button("Clear conversation", key=chat_key + "::clear")
-
     if clear:
-        st.session_state[chat_key + "::history"] = []
-        st.session_state[chat_key + "::question"] = ""
-        st.success("Cleared.")
-        st.stop()
+        # Do not modify the text_area value after instantiation; request clear and rerun.
+        st.session_state[clear_flag] = True
+        st.rerun()
 
     if ask:
         q = (q or "").strip()

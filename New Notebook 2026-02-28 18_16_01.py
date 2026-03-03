@@ -1,5 +1,21 @@
 # Databricks notebook source
 # MAGIC %sql
+# MAGIC SELECT DISTINCT server_name
+# MAGIC     FROM btris_dbx.observability.v_latest_sql_diagnostics
+# MAGIC     ORDER BY server_name
+
+# COMMAND ----------
+
+from databricks.sdk import WorkspaceClient
+
+w = WorkspaceClient()
+
+for sp in w.service_principals.list():
+    print(sp.display_name, "->", sp.id)
+
+# COMMAND ----------
+
+# MAGIC %sql
 # MAGIC GRANT READ VOLUME
 # MAGIC ON VOLUME btris_dbx.observability.server_observability_vol
 # MAGIC TO `a70123f0-da9c-444a-bcfa-eed1fa16a9d4`;

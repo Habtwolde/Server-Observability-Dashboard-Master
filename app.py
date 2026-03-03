@@ -1,6 +1,7 @@
 import streamlit as st
 from services.servers_service import load_servers
 from ui.overview_tab import render_overview
+from ui.windows_events_tab import render_windows_events_tab
 from ui.report_tab import render_report_tab
 from ui.expensive_queries_tab import render_expensive_queries_tab
 
@@ -44,12 +45,18 @@ with col_select:
 # -------------------------
 # Tabs (Overview + Report)
 # -------------------------
-tab_overview, tab_expensive, tab_report = st.tabs(
-    ["Overview", "Most Expensive Queries", "Generate Server health assessment report"]
-)
+tab_overview, tab_windows, tab_expensive, tab_report = st.tabs([
+    "Overview",
+    "Windows Events",
+    "Most Expensive Queries",
+    "Generate Server health assessment report",
+])
 
 with tab_overview:
     render_overview(selected_server)
+
+with tab_windows:
+    render_windows_events_tab(selected_server)
 
 with tab_expensive:
     render_expensive_queries_tab(selected_server)

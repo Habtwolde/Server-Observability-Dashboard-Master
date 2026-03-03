@@ -74,7 +74,7 @@ def _extract_template_headings(template_bytes: bytes) -> List[str]:
     headings: List[str] = []
 
     # Match: 1. ...  OR 2.1 ... OR 3.6 ...
-    rx = re.compile(r"^\d+(?:\.\d+)?\s|^\d+\.\s")
+    rx = re.compile(r"^\d+(?:\.\d+)?\.\s")  # Only headings like "1. " or "2.1. "
 
     for p in doc.paragraphs:
         t = (p.text or "").strip()
@@ -93,8 +93,6 @@ def _extract_template_headings(template_bytes: bytes) -> List[str]:
 
     # Safety: if template has only major headings, still return them
     return out
-
-
 
 
 def get_report_filename(server_name: str) -> str:
@@ -237,6 +235,13 @@ def _draft_report_json(server_name: str, ctx: Dict[str, Any], section_order: Lis
                         "heading": "string (must match a section_order item exactly)",
                         "paragraphs": ["string"],
                         "bullets": ["string"],
+                        "tables": [
+                            {
+                                "title": "string",
+                                "columns": ["string"],
+                                "rows": [["string"]]
+                            }
+                        ]
                     }
                 ],
             },
@@ -391,6 +396,204 @@ def _pick_exemplars(doc: Document, start: int, end: int, global_body: Paragraph,
     return (body_ex or global_body, bullet_ex or global_bullet)
 
 
+def _fmt(v: Any, suffix: str = "") -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "Not available in this snapshot."
+    try:
+        if isinstance(v, (int, float)) and suffix:
+            return f"{float(v):.2f}{suffix}"
+        return str(v)
+    except Exception:
+        return "Not available in this snapshot."
+
+
+def _has_any_metric(ctx: Dict[str, Any]) -> bool:
+    if not isinstance(ctx, dict):
+        return False
+    util = ctx.get("utilization") or {}
+    pressure = ctx.get("pressure") or {}
+    cfg = ctx.get("configuration") or {}
+    instance = ctx.get("instance") or {}
+    def any_val(d: Any, keys: list[str]) -> bool:
+        if not isinstance(d, dict):
+            return False
+        for k in keys:
+            v = d.get(k)
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                return True
+        return False
+    return any([
+        any_val(util, ["max_cpu_pct", "max_memory_pct", "cache_ple_seconds"]),
+        any_val(pressure, ["min_ple", "memory_grants_pending"]),
+        any_val(cfg, ["maxdop", "cost_threshold", "max_server_memory_mb"]),
+        any_val(instance, ["edition", "product_version", "product_level", "sql_start_time", "host_name"]),
+    ])
+
+def _build_tables_from_evidence(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Return deterministic tables to embed in sections."""
+    util = (ctx.get("utilization") or {}) if isinstance(ctx, dict) else {}
+    cfg = (ctx.get("configuration") or {}) if isinstance(ctx, dict) else {}
+    pressure = (ctx.get("pressure") or {}) if isinstance(ctx, dict) else {}
+    instance = (ctx.get("instance") or {}) if isinstance(ctx, dict) else {}
+
+    tables: Dict[str, Any] = {}
+
+    tables["key_metrics"] = {
+        "title": "Key metrics (latest snapshot)",
+        "columns": ["Metric", "Value"],
+        "rows": [
+            ["Max CPU (%)", _fmt(util.get("max_cpu_pct"), "%") if util.get("max_cpu_pct") is not None else "Not available in this snapshot."],
+            ["Max Memory (%)", _fmt(util.get("max_memory_pct"), "%") if util.get("max_memory_pct") is not None else "Not available in this snapshot."],
+            ["Cache PLE (sec)", _fmt(util.get("cache_ple_seconds"))],
+            ["Min PLE (sec)", _fmt(pressure.get("min_ple"))],
+            ["Memory grants pending", _fmt(pressure.get("memory_grants_pending"))],
+        ],
+    }
+
+    tables["configuration"] = {
+        "title": "SQL Server configuration (selected)",
+        "columns": ["Setting", "Value"],
+        "rows": [
+            ["MAXDOP", _fmt(cfg.get("maxdop"))],
+            ["Cost threshold for parallelism", _fmt(cfg.get("cost_threshold"))],
+            ["Max server memory (MB)", _fmt(cfg.get("max_server_memory_mb"))],
+        ],
+    }
+
+    if isinstance(instance, dict) and instance:
+        rows = []
+        for k in ["edition", "product_version", "product_level", "sql_start_time", "host_name"]:
+            if k in instance:
+                rows.append([k.replace("_", " ").title(), _fmt(instance.get(k))])
+        if rows:
+            tables["instance"] = {"title": "Instance / host summary", "columns": ["Field", "Value"], "rows": rows}
+
+    return tables
+
+
+def _derive_key_findings(ctx: Dict[str, Any]) -> List[str]:
+    util = (ctx.get("utilization") or {}) if isinstance(ctx, dict) else {}
+    pressure = (ctx.get("pressure") or {}) if isinstance(ctx, dict) else {}
+    cfg = (ctx.get("configuration") or {}) if isinstance(ctx, dict) else {}
+
+    findings: List[str] = []
+    cpu = util.get("max_cpu_pct")
+    mem = util.get("max_memory_pct")
+    ple = util.get("cache_ple_seconds") or pressure.get("min_ple")
+    grants = pressure.get("memory_grants_pending")
+
+    try:
+        if cpu is not None and float(cpu) >= 85:
+            findings.append(f"CPU pressure observed: max CPU reached {float(cpu):.1f}%.")
+        elif cpu is not None:
+            findings.append(f"CPU utilization is within normal bounds: max CPU {float(cpu):.1f}%.")
+
+        if mem is not None and float(mem) >= 85:
+            findings.append(f"Memory pressure observed: max memory reached {float(mem):.1f}%.")
+        elif mem is not None:
+            findings.append(f"Memory utilization is within normal bounds: max memory {float(mem):.1f}%.")
+
+        if ple is not None and float(ple) < 300:
+            findings.append(f"Buffer cache pressure: PLE is low ({float(ple):.0f}s).")
+        elif ple is not None:
+            findings.append(f"Buffer cache stability: PLE {float(ple):.0f}s.")
+
+        if grants is not None and float(grants) > 0:
+            findings.append(f"Memory grants pending is non-zero ({float(grants):.0f}); potential query memory pressure.")
+    except Exception:
+        pass
+
+    maxdop = cfg.get("maxdop")
+    ctfp = cfg.get("cost_threshold")
+    if maxdop is not None:
+        findings.append(f"MAXDOP configured to {maxdop}.")
+    if ctfp is not None:
+        findings.append(f"Cost threshold for parallelism configured to {ctfp}.")
+
+    if not findings:
+        findings.append("Not available in this snapshot.")
+    return findings
+
+
+def _derive_remediation(ctx: Dict[str, Any]) -> List[str]:
+    util = (ctx.get("utilization") or {}) if isinstance(ctx, dict) else {}
+    pressure = (ctx.get("pressure") or {}) if isinstance(ctx, dict) else {}
+
+    recs: List[str] = []
+    cpu = util.get("max_cpu_pct")
+    mem = util.get("max_memory_pct")
+    ple = util.get("cache_ple_seconds") or pressure.get("min_ple")
+    grants = pressure.get("memory_grants_pending")
+
+    try:
+        if cpu is not None and float(cpu) >= 85:
+            recs.append("Investigate top CPU consumers (expensive queries, compilation, parallelism); validate indexes and query plans for regressions.")
+        if mem is not None and float(mem) >= 85:
+            recs.append("Review max server memory configuration and OS headroom; validate buffer pool and plan cache behavior.")
+        if ple is not None and float(ple) < 300:
+            recs.append("Investigate memory pressure drivers (large scans, missing indexes, suboptimal joins); consider targeted indexing and query tuning.")
+        if grants is not None and float(grants) > 0:
+            recs.append("Identify queries with large memory grants and reduce spill risk (statistics, indexing, row estimates).")
+    except Exception:
+        pass
+
+    if not recs:
+        recs.append("Continue baseline monitoring and trend analysis; no immediate remediation indicated from this snapshot.")
+    return recs
+
+
+def _enrich_payload(payload: Dict[str, Any], ctx: Dict[str, Any], section_order: List[str]) -> Dict[str, Any]:
+    """Hybrid enrichment:
+    - If the snapshot has metrics, inject deterministic tables + evidence-driven findings.
+    - If metrics are missing, do NOT force 'Not available' everywhere; let the LLM provide narrative placeholders.
+    """
+    has_metrics = _has_any_metric(ctx)
+    tables = _build_tables_from_evidence(ctx) if has_metrics else {}
+    findings = _derive_key_findings(ctx) if has_metrics else []
+    remediation = _derive_remediation(ctx) if has_metrics else []
+
+    sec_list = payload.get("sections") or []
+    if not isinstance(sec_list, list):
+        return payload
+
+    def _get_sec(h: str) -> Optional[Dict[str, Any]]:
+        for s in sec_list:
+            if isinstance(s, dict) and str(s.get("heading","")).strip() == h:
+                return s
+        return None
+
+    s1 = _get_sec("1. Executive Summary")
+    if s1 is not None and "key_metrics" in tables:
+        s1["tables"] = (s1.get("tables") or []) + [tables["key_metrics"]]
+
+    s2 = _get_sec("2. Environment Overview")
+    if s2 is not None and "configuration" in tables:
+        add = [tables["configuration"]]
+        if "instance" in tables:
+            add.insert(0, tables["instance"])
+        s2["tables"] = (s2.get("tables") or []) + add
+
+    s3 = _get_sec("3. Observed Performance Characteristics")
+    if s3 is not None and "key_metrics" in tables:
+        s3["tables"] = (s3.get("tables") or []) + [tables["key_metrics"]]
+
+    s4 = _get_sec("4. Key Findings")
+    if s4 is not None and findings:
+        existing = s4.get("bullets") or []
+        if not isinstance(existing, list):
+            existing = [str(existing)]
+        s4["bullets"] = findings + existing
+
+    s5 = _get_sec("5. Remediation Plan")
+    if s5 is not None and remediation:
+        existing = s5.get("bullets") or []
+        if not isinstance(existing, list):
+            existing = [str(existing)]
+        s5["bullets"] = remediation + existing
+
+    return payload
+
+
 def _render_into_template(template_bytes: bytes, payload: Dict[str, Any], *, server_name: str, snapshot: str, wanted_order: List[str]) -> bytes:
     doc = Document(BytesIO(template_bytes))
 
@@ -482,6 +685,54 @@ def _render_into_template(template_bytes: bytes, payload: Dict[str, Any], *, ser
             anchor = _clone_paragraph_after(anchor, bullet_ex, b)
             inserted_any = True
 
+        # Tables (optional)
+        tables = sec.get("tables") or []
+        if isinstance(tables, dict):
+            tables = [tables]
+        if isinstance(tables, list) and tables:
+            for tb in tables:
+                if not isinstance(tb, dict):
+                    continue
+                title = str(tb.get("title") or "").strip()
+                cols = tb.get("columns") or []
+                rows = tb.get("rows") or []
+                if not isinstance(cols, list) or not cols:
+                    continue
+                if not isinstance(rows, list):
+                    continue
+
+                # Add a table title (as body paragraph)
+                if title:
+                    anchor = _clone_paragraph_after(anchor, body_ex, title)
+                    inserted_any = True
+
+                # Insert a Word table right after the current anchor paragraph
+                try:
+                    table = doc.add_table(rows=1, cols=len(cols))
+                    # Style names vary by template; set only if available
+                    try:
+                        table.style = "Table Grid"
+                    except Exception:
+                        pass
+                    hdr_cells = table.rows[0].cells
+                    for j, c in enumerate(cols):
+                        hdr_cells[j].text = str(c)
+
+                    for r in rows:
+                        if not isinstance(r, list):
+                            continue
+                        row_cells = table.add_row().cells
+                        for j in range(len(cols)):
+                            val = r[j] if j < len(r) else ""
+                            row_cells[j].text = "" if val is None else str(val)
+
+                    anchor._p.addnext(table._tbl)
+                    inserted_any = True
+                except Exception:
+                    # If table insertion fails, fall back to a simple note
+                    anchor = _clone_paragraph_after(anchor, bullet_ex, "(Table rendering failed — falling back to text.)")
+                    inserted_any = True
+
         if not inserted_any:
             anchor = _clone_paragraph_after(anchor, body_ex, "Not available in this snapshot.")
 
@@ -557,6 +808,7 @@ def generate_report_docx_bytes(server_name: str) -> bytes:
     try:
         t0 = time.time()
         payload = _draft_report_json(server_name, ctx, wanted_order)
+        payload = _enrich_payload(payload, ctx, wanted_order)
         _ = time.time() - t0
     except Exception as e:
         style = _load_style_prompt()
@@ -570,5 +822,9 @@ def generate_report_docx_bytes(server_name: str) -> bytes:
             ],
             "_error": repr(e),
         }
+        try:
+            payload = _enrich_payload(payload, ctx, wanted_order)
+        except Exception:
+            pass
 
     return _render_into_template(tpl_bytes, payload, server_name=server_name, snapshot=snapshot, wanted_order=wanted_order)
