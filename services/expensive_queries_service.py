@@ -101,20 +101,53 @@ def list_expensive_query_types(server_name: str) -> List[QueryTypeOption]:
 # ----------------------------
 # Data access
 # ----------------------------
-@st.cache_data(show_spinner=False, ttl=300)
-def fetch_latest_expensive_queries(server_name: str, sheet_name: str) -> Tuple[pd.DataFrame, Optional[str]]:
+def _fetch_sheet_for_ingestion(
+    server_name: str,
+    sheet_name: str,
+    ingestion_date: str,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    if not server_name or not sheet_name or not ingestion_date:
+        return pd.DataFrame(), None
+
+    q = f"""
+    SELECT CAST(snapshot_date AS string) AS snapshot_date
+    FROM btris_dbx.observability.sql_diagnostics_files_delta
+    WHERE server_name = '{metrics_service._sql_quote(server_name)}'
+      AND CAST(ingestion_date AS string) = '{metrics_service._sql_quote(ingestion_date)}'
+    LIMIT 1
     """
-    Fetch the latest snapshot rows for the expensive-query sheet. Expands row_json.
+    df_snap = metrics_service.run_query(q)
+
+    if df_snap.empty or "snapshot_date" not in df_snap.columns:
+        return pd.DataFrame(), None
+
+    snapshot = str(df_snap["snapshot_date"].iloc[0])
+    df = metrics_service._fetch_sheet(server_name, snapshot, sheet_name)
+    return df, snapshot
+
+@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=300)
+def fetch_latest_expensive_queries(
+    server_name: str,
+    sheet_name: str,
+    ingestion_date: str | None = None,
+) -> Tuple[pd.DataFrame, Optional[str]]:
+    """
+    Fetch expensive-query rows for the selected ingestion_date when provided.
+    Falls back to the latest snapshot behavior when ingestion_date is not supplied.
     Returns (df, snapshot_used).
     """
     if not server_name or not sheet_name:
         return pd.DataFrame(), None
 
-    df, snap = metrics_service._fetch_sheet_latest(server_name, sheet_name)
+    if ingestion_date:
+        df, snap = _fetch_sheet_for_ingestion(server_name, sheet_name, ingestion_date)
+    else:
+        df, snap = metrics_service._fetch_sheet_latest(server_name, sheet_name)
+
     if df is None or df.empty:
         return pd.DataFrame(), snap
     return df, snap
-
 
 def pick_query_text_column(df: pd.DataFrame) -> Optional[str]:
     if df is None or df.empty:

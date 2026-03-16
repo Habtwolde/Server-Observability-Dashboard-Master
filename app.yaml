@@ -3,13 +3,24 @@ command: ["streamlit", "run", "app.py", "--server.port", "8000", "--server.addre
 env:
   - name: PYTHONPATH
     value: /app/python/source_code
+
+  - name: DATABRICKS_HOST
+    value: "https://adb-4480026081424261.1.azuredatabricks.net"
+
   - name: DATABRICKS_WAREHOUSE_ID
     value: "47bde9279fec4222"
+
+  - name: VECTOR_SEARCH_INDEX
+    value: "btris_dbx.observability.sql-diag-vector-index"
+
+  - name: VECTOR_SEARCH_ENDPOINT
+    value: "sql-observability-vector-endpoint"
+
   - name: OBS_SERVERS_VIEW
     value: v_latest_sql_diagnostics
+
   - name: OBS_PERF_TABLE
     value: sql_diagnostics_bronze
-  
 
 files:
   - app.py

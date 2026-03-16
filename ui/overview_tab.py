@@ -198,7 +198,6 @@ def _mb_to_gb(v):
 
 
 def _health(cpu, mem, ple):
-    # Conservative, readable health heuristic
     score = 0
     if isinstance(cpu, (int, float)):
         score += 2 if cpu >= 85 else (1 if cpu >= 65 else 0)
@@ -225,7 +224,6 @@ def _kpi_class_for_pct(v, warn_at, bad_at):
 
 
 def _kpi_class_for_leq(v, warn_at, bad_at):
-    # "Lower is worse" (e.g., PLE)
     if not isinstance(v, (int, float)):
         return "ok"
     if v <= bad_at:
@@ -256,7 +254,9 @@ def _kpi_tile_html(label, value, hint, klass="ok"):
 
 
 def _download_button(selected_server: str):
-    file_path = get_latest_file_path(selected_server)
+    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
+    file_path = get_latest_file_path(selected_server, selected_ingestion_date)
+
     if not file_path:
         return
     try:
@@ -269,7 +269,6 @@ def _download_button(selected_server: str):
             use_container_width=True,
         )
     except Exception:
-        # Non-blocking: keep UI usable even if download fails
         pass
 
 
@@ -356,7 +355,7 @@ def _render_waits_table(waits_df: pd.DataFrame):
         sms = r["signal_ms"]
 
         width = int(round((pct / max_pct) * 100))
-        is_top = (i == 0)
+        is_top = i == 0
 
         wt_class = "wait-type top" if is_top else "wait-type"
         top_badge = "<span class='badge-mini'>Top</span>" if is_top else ""
@@ -395,17 +394,186 @@ def _render_waits_table(waits_df: pd.DataFrame):
     st.markdown(table, unsafe_allow_html=True)
 
 
+def _render_ai_assistant(selected_server: str, selected_ingestion_date: str | None) -> None:
+    from services.ai_service import ask_server_ai
+
+    scope_key = f"{selected_server}::{selected_ingestion_date}"
+    q_key = f"ai_question::{scope_key}"
+    h_key = f"ai_history::{scope_key}"
+    r_key = f"ai_result::{scope_key}"
+
+    history = st.session_state.setdefault(h_key, [])
+    result = st.session_state.get(r_key)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.markdown("### 🤖 AI Diagnostic Assistant")
+
+    st.markdown(
+        """
+        <div class="panel">
+        <div class="panel-title">🤖 AI Server Assistant</div>
+        <div class="panel-subtle">
+            Ask about this server snapshot, compare ingestions, or compare servers.
+        </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    q_col, clear_col = st.columns([6.0, 1.2], gap="small")
+    with q_col:
+        question = st.text_input(
+            "Ask about this server",
+            placeholder="Why is CPU high? Compare latest and previous ingestion. What waits dominate hc1dbsq36pv?",
+            key=q_key,
+            label_visibility="visible",
+        )
+    with clear_col:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("Clear", key=f"clear_ai::{scope_key}", use_container_width=True):
+            st.session_state[q_key] = ""
+            st.session_state[r_key] = None
+            st.session_state[h_key] = []
+            st.rerun()
+
+
+    #     q_col, clear_col = st.columns([6.0, 1.2], gap="small")
+    # with q_col:
+    #     question = st.text_input(
+    #         "Ask about this server",
+    #         placeholder="Why is CPU high? Compare latest and previous ingestion. What waits dominate hc1dbsq36pv?",
+    #         key=q_key,
+    #         label_visibility="visible",
+    #     )
+
+    # with clear_col:
+    #     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+    #     if st.button("Clear", key=f"clear_ai::{scope_key}", use_container_width=True):
+    #         st.session_state[q_key] = ""
+    #         st.session_state[r_key] = None
+    #         st.session_state[h_key] = []
+    #         st.rerun()
+
+    ai_progress_slot = st.empty()
+
+    if question and question.strip():
+        if not result or result.get("question") != question.strip():
+            with ai_progress_slot.container():
+                st.markdown(
+                    """
+<div class="insight">
+  <div class="insight-title">⏳ Analyzing your question...</div>
+  <div class="insight-text">
+    Searching diagnostics, resolving scope, and preparing analysis.
+  </div>
+</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            with st.spinner("Analyzing diagnostics with AI..."):
+                response = ask_server_ai(
+                    server_name=selected_server,
+                    ingestion_date=selected_ingestion_date,
+                    question=question.strip(),
+                )
+
+            ai_progress_slot.empty()
+
+            result = {
+                "question": question.strip(),
+                **response,
+            }
+            st.session_state[r_key] = result
+
+            history.append(
+                {
+                    "question": result["question"],
+                    "answer": result["answer"],
+                    "found": result["found"],
+                    "mode": result["mode"],
+                    "resolved_server": result.get("resolved_server"),
+                    "resolved_ingestion_date": result.get("resolved_ingestion_date"),
+                    "compare_servers": result.get("compare_servers", []),
+                    "compare_dates": result.get("compare_dates", []),
+                }
+            )
+            st.session_state[h_key] = history[-5:]
+    result = st.session_state.get(r_key)
+
+    if result:
+        scope_parts = []
+
+        if result.get("mode") == "compare":
+            compare_servers = result.get("compare_servers") or []
+            compare_dates = result.get("compare_dates") or []
+
+            if compare_servers:
+                scope_parts.append(f"**Servers:** {', '.join(compare_servers)}")
+            if compare_dates:
+                scope_parts.append(f"**Dates:** {', '.join(compare_dates)}")
+        else:
+            if result.get("resolved_server"):
+                scope_parts.append(f"**Server:** {result['resolved_server']}")
+            if result.get("resolved_ingestion_date"):
+                scope_parts.append(f"**Ingestion Date:** {result['resolved_ingestion_date']}")
+
+        if scope_parts:
+            st.markdown(
+                f"""
+<div class="insight">
+  <div class="insight-title">Resolved Scope</div>
+  <div class="insight-text">{' &nbsp;•&nbsp; '.join(scope_parts)}</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        if result.get("found"):
+            st.markdown(
+                """
+<div class="panel">
+  <div class="panel-title">🧠 AI Analysis</div>
+</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(result["answer"])
+        else:
+            st.info(result["answer"])
+
+    if history:
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        with st.expander("Recent AI questions", expanded=False):
+            for i, item in enumerate(reversed(history[-5:]), start=1):
+                st.markdown(f"**{i}. {item['question']}**")
+                if item.get("found"):
+                    preview = item["answer"][:300] + ("..." if len(item["answer"]) > 300 else "")
+                    st.markdown(preview)
+                else:
+                    st.caption(item["answer"])
+                st.markdown("---")
+
+
 def render_overview(selected_server: str):
+    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
     st.markdown(_CSS, unsafe_allow_html=True)
 
-    # Keep a visible spinner while the app queries Delta tables.
     cache = st.session_state.setdefault("_overview_profile_cache", {})
-    if selected_server in cache:
-        profile = cache[selected_server]
+    cache_key = f"{selected_server}_{selected_ingestion_date}"
+
+    if cache_key in cache:
+        profile = cache[cache_key]
     else:
-        with st.spinner("Loading latest server snapshot from Delta tables..."):
-            profile = build_server_profile(selected_server)
-        cache[selected_server] = profile
+        with st.spinner("Loading server snapshot from Delta tables..."):
+            profile = build_server_profile(
+                selected_server,
+                selected_ingestion_date
+            )
+        cache[cache_key] = profile
 
     instance = profile.get("instance") or {}
     util = profile.get("utilization") or {}
@@ -428,7 +596,6 @@ def render_overview(selected_server: str):
 
     health_label, health_class = _health(cpu_pct, mem_pct, ple_s)
 
-    # ===== Header row (section-based, no outer card) =====
     left, right = st.columns([4.5, 1.2])
     with left:
         st.markdown(
@@ -441,7 +608,6 @@ def render_overview(selected_server: str):
     with right:
         _download_button(selected_server)
 
-    # ===== Insight strip (lightweight) =====
     insight_title, insight_text = _build_exec_insight(cpu_pct, mem_pct, ple_s, io_stats)
     st.markdown(
         f"""<div class="insight">
@@ -453,7 +619,6 @@ def render_overview(selected_server: str):
 
     st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
 
-    # ===== KPIs (native Streamlit columns = avoids "one container" feel) =====
     cpu_class = _kpi_class_for_pct(cpu_pct, warn_at=65, bad_at=85)
     mem_class = _kpi_class_for_pct(mem_pct, warn_at=65, bad_at=85)
     ple_class = _kpi_class_for_leq(ple_s, warn_at=600, bad_at=300)
@@ -476,7 +641,8 @@ def render_overview(selected_server: str):
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # ===== Main sections =====
+    # _render_ai_assistant(selected_server, selected_ingestion_date)
+
     st.markdown("#### Performance & Bottlenecks")
     colA, colB = st.columns([1.1, 1.0])
 
@@ -555,4 +721,14 @@ def render_overview(selected_server: str):
         c3.metric("Max Mem", _mb_to_gb(conf.get("max_server_memory_mb")))
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # st.caption("Source: Latest ingested weekly SQL diagnostics workbook")
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+
+    # =====================================
+    # AI Server Assistant (Deep Analysis)
+    # =====================================
+    _render_ai_assistant(selected_server, selected_ingestion_date)
+
     st.caption("Source: Latest ingested weekly SQL diagnostics workbook")
+    
+    

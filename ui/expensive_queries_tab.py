@@ -103,6 +103,7 @@ Return a Markdown response with EXACTLY these sections and headings:
 
 
 def render_expensive_queries_tab(selected_server: str) -> None:
+    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
     st.subheader("Most Expensive Queries")
 
     if not selected_server:
@@ -130,7 +131,11 @@ def render_expensive_queries_tab(selected_server: str) -> None:
     # Load data for chosen sheet
     # -------------------------
     with st.spinner("Loading expensive queries from Delta…"):
-        df, snap = fetch_latest_expensive_queries(selected_server, opt.sheet_name)
+        df, snap = fetch_latest_expensive_queries(
+            selected_server,
+            opt.sheet_name,
+            selected_ingestion_date
+        )
 
     if df.empty:
         st.warning(f"No rows found for sheet '{opt.sheet_name}' (latest snapshot: {snap or 'unknown'}).")

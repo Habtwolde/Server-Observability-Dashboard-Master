@@ -3,3 +3,4 @@ pandas
 databricks-sql-connector
 python-docx
 pypandoc
+databricks-vectorsearch
