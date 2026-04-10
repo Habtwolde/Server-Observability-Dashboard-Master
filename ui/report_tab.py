@@ -9,8 +9,7 @@ from services.report_service import (
 )
 
 
-def render_report_tab(selected_server: str) -> None:
-    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
+def render_report_tab(selected_server: str, selected_ingestion_date: str | None) -> None:
     st.markdown(
         """
 <style>

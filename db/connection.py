@@ -14,7 +14,7 @@ def get_workspace_client():
 # Warehouse ID should preferably come from environment variables.
 WAREHOUSE_ID = os.getenv("DATABRICKS_WAREHOUSE_ID", "").strip()
 if not WAREHOUSE_ID:
-    WAREHOUSE_ID = "47bde9279fec4222"  # fallback for development only
+    raise RuntimeError("DATABRICKS_WAREHOUSE_ID is not set.")
 
 
 @st.cache_data(ttl=60)
@@ -30,7 +30,7 @@ def run_query(query: str) -> pd.DataFrame:
     if not query or not str(query).strip():
         raise ValueError("Query must not be empty.")
 
-    print("EXECUTING SQL:", query)
+    # print("EXECUTING SQL:", query)
     w = get_workspace_client()
 
     resp = w.statement_execution.execute_statement(

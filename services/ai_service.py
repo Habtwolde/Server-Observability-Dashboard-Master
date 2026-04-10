@@ -3,6 +3,7 @@ import os
 import re
 from difflib import get_close_matches
 from typing import Optional, List, Dict, Any
+from services.metrics_service import _sql_quote, build_server_profile
 
 try:
     from databricks.vector_search.client import VectorSearchClient
@@ -45,7 +46,7 @@ def _get_ingestion_dates_for_server(server_name: str) -> List[str]:
     df = run_query(f"""
         SELECT DISTINCT CAST(ingestion_date AS STRING) AS ingestion_date
         FROM btris_dbx.observability.sql_diagnostics_files_delta
-        WHERE server_name = '{server_name}'
+        WHERE server_name = '{_sql_quote(server_name)}'
         ORDER BY ingestion_date DESC
     """)
     if df.empty or "ingestion_date" not in df.columns:
@@ -228,16 +229,46 @@ def _resolve_compare_dates(
 # ---------------------------------------------------------
 # Intent detection + semantic sheet weighting
 # ---------------------------------------------------------
+def _is_non_diagnostic_chat(question: str) -> bool:
+    q = (question or "").strip().lower()
+    if not q:
+        return True
+
+    simple_chat = {
+        "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
+        "good morning", "good afternoon", "good evening"
+    }
+    if q in simple_chat:
+        return True
+
+    if len(q) <= 3 and q.isalpha():
+        return True
+
+    return False
+
 def _detect_query_intent(question: str) -> str:
-    q = (question or "").lower()
+    q = (question or "").lower().strip()
 
     if "compare" in q:
         return "compare"
+
+    general_knowledge_signals = [
+        "what is ",
+        "what's ",
+        "explain ",
+        "meaning of ",
+        "define ",
+        "how does ",
+        "difference between ",
+    ]
+    if any(sig in q for sig in general_knowledge_signals):
+        return "general"
+
     if any(x in q for x in ["cpu", "scheduler", "worker time"]):
         return "cpu"
     if any(x in q for x in ["io", "latency", "read", "write", "disk", "iops"]):
         return "io"
-    if any(x in q for x in ["wait", "blocking", "lock", "latch", "cxpacket", "cxconsumer"]):
+    if any(x in q for x in ["wait", "blocking", "lock", "latch", "cxpacket", "cxconsumer", "pageiolatch"]):
         return "waits"
     if any(x in q for x in ["query", "queries", "procedure", "stored procedure", "index", "logical reads", "elapsed"]):
         return "queries"
@@ -381,6 +412,37 @@ def _rerank_rows_by_intent(rows: List[Dict[str, Any]], intent: str, top_k: int =
 # ---------------------------------------------------------
 # Prompt builders with diagnostic reasoning chains
 # ---------------------------------------------------------
+def _json_safe(obj: Any) -> Any:
+    if obj is None:
+        return None
+
+    if isinstance(obj, (str, bool, int, float)):
+        return obj
+
+    try:
+        import numpy as np  # type: ignore
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, (np.bool_,)):
+            return bool(obj)
+    except Exception:
+        pass
+
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+
+    try:
+        if hasattr(obj, "item"):
+            return obj.item()
+    except Exception:
+        pass
+
+    return str(obj)
 def _build_prompt_single_scope(
     question: str,
     intent: str,
@@ -400,38 +462,66 @@ def _build_prompt_single_scope(
             }
         )
 
+    deterministic_profile: Dict[str, Any] = {}
+    if resolved_server:
+        try:
+            deterministic_profile = build_server_profile(
+                resolved_server,
+                resolved_ingestion_date,
+            )
+        except Exception as e:
+            deterministic_profile = {
+                "profile_error": str(e),
+                "server_name": resolved_server,
+                "ingestion_date": resolved_ingestion_date,
+            }
+
+    compact_profile = _json_safe({
+        "server_name": deterministic_profile.get("server_name"),
+        "snapshot": deterministic_profile.get("snapshot"),
+        "instance": deterministic_profile.get("instance", {}),
+        "utilization": deterministic_profile.get("utilization", {}),
+        "pressure": deterministic_profile.get("pressure", {}),
+        "configuration": deterministic_profile.get("configuration", {}),
+        "io_stats": deterministic_profile.get("io_stats", {}),
+        "wait_summary": deterministic_profile.get("wait_summary", {}),
+        "top_waits": deterministic_profile.get("top_waits", [])[:8],
+        "query_hotspots": deterministic_profile.get("query_hotspots", [])[:8],
+        "database_settings": deterministic_profile.get("database_settings", {}),
+        "notes": deterministic_profile.get("notes", []),
+    })
+
     return f"""
-You are a senior SQL Server performance engineer.
+    You are answering a SQL Server observability question for a selected server snapshot.
 
-Use ONLY the retrieved diagnostics context below.
-Do not invent metrics, waits, queries, or configuration values.
-If the evidence is partial, say so clearly.
+    Use deterministic server context as the primary source of truth.
+    Use retrieved diagnostics snippets as supporting evidence.
+    Do not invent metrics, waits, queries, dates, or configuration values.
+    If evidence is partial, missing, or conflicting, say so clearly.
 
-Diagnostic reasoning chain:
-1. Determine the query intent.
-2. Identify the most relevant sheets and evidence.
-3. Explain the likely cause.
-4. Recommend the most practical next action.
+    Answer behavior rules:
+    - Match the shape of the user's question.
+    - Do not force the same structure every time.
+    - If the question is simple, answer simply.
+    - If the question asks "why", explain the most likely cause using the available evidence.
+    - If the question asks for recommendation, prioritize concrete next actions.
+    - If the question asks for interpretation, focus on interpretation rather than generic remediation.
+    - Prefer concise, direct language over consultant-style repetition.
 
-Resolved retrieval scope:
-- Server: {resolved_server or "not specified"}
-- Ingestion Date: {resolved_ingestion_date or "not specified"}
-- Detected Intent: {intent}
+    Resolved scope:
+    - Server: {resolved_server or "not specified"}
+    - Ingestion Date: {resolved_ingestion_date or "not specified"}
+    - Intent: {intent}
 
-User question:
-{question}
+    User question:
+    {question}
 
-Retrieved diagnostics context:
-{json.dumps(context, ensure_ascii=False, indent=2)}
+    Deterministic server context:
+    {json.dumps(compact_profile, ensure_ascii=False, indent=2)}
 
-Return:
-1. Short answer
-2. Evidence from diagnostics
-3. Likely cause
-4. Recommended action
-5. Confidence level (High / Medium / Low)
-""".strip()
-
+    Retrieved diagnostics snippets:
+    {json.dumps(context, ensure_ascii=False, indent=2)}
+    """.strip()
 
 def _build_prompt_compare_scope(
     question: str,
@@ -466,56 +556,113 @@ def _build_prompt_compare_scope(
             }
         )
 
+    left_profile: Dict[str, Any] = {}
+    right_profile: Dict[str, Any] = {}
+
+    try:
+        if len(compare_servers) == 2:
+            left_profile = build_server_profile(
+                compare_servers[0],
+                compare_dates[0] if compare_dates else None,
+            )
+            right_profile = build_server_profile(
+                compare_servers[1],
+                compare_dates[1] if len(compare_dates) > 1 else compare_dates[0] if compare_dates else None,
+            )
+        elif len(compare_servers) == 1 and len(compare_dates) >= 2:
+            left_profile = build_server_profile(compare_servers[0], compare_dates[0])
+            right_profile = build_server_profile(compare_servers[0], compare_dates[1])
+    except Exception as e:
+        left_profile = {"profile_error": str(e)}
+        right_profile = {"profile_error": str(e)}
+
+    def _compact(profile: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "server_name": profile.get("server_name"),
+            "snapshot": profile.get("snapshot"),
+            "instance": profile.get("instance", {}),
+            "utilization": profile.get("utilization", {}),
+            "pressure": profile.get("pressure", {}),
+            "configuration": profile.get("configuration", {}),
+            "io_stats": profile.get("io_stats", {}),
+            "wait_summary": profile.get("wait_summary", {}),
+            "top_waits": profile.get("top_waits", [])[:8],
+            "query_hotspots": profile.get("query_hotspots", [])[:8],
+            "database_settings": profile.get("database_settings", {}),
+            "notes": profile.get("notes", []),
+        }
+
+    left_compact = _json_safe(_compact(left_profile))
+    right_compact = _json_safe(_compact(right_profile))
+
     return f"""
-You are a senior SQL Server performance engineer.
+You are answering a comparison question for SQL Server observability.
 
-Use ONLY the retrieved diagnostics context below.
-Do not invent metrics, waits, queries, or configuration values.
-If the evidence is partial, say so clearly.
+Use deterministic server context as the primary comparison basis.
+Use retrieved diagnostics snippets as supporting evidence.
+Do not invent metrics, waits, queries, dates, or configuration values.
+If evidence is partial, missing, or conflicting, say so clearly.
 
-Diagnostic reasoning chain:
-1. Compare the evidence sets.
-2. Identify what changed materially.
-3. Explain likely workload or operational reasons.
-4. Recommend the most practical next action.
+Comparison answer rules:
+- Match the shape of the user's question.
+- Do not force the same comparison template every time.
+- Focus on the most material differences only.
+- If the user asks a narrow comparison question, answer narrowly.
+- If one side is clearly worse, say so directly and explain why.
+- Prefer concise, evidence-based language over generic consultant phrasing.
 
 Comparison scope:
 - Servers: {", ".join(compare_servers) if compare_servers else "not specified"}
 - Date A: {compare_dates[0] if len(compare_dates) > 0 else "not specified"}
 - Date B: {compare_dates[1] if len(compare_dates) > 1 else "not specified"}
-- Detected Intent: {intent}
+- Intent: {intent}
 
 User question:
 {question}
 
-Retrieved diagnostics for scope A:
+Deterministic context for scope A:
+{json.dumps(left_compact, ensure_ascii=False, indent=2)}
+
+Deterministic context for scope B:
+{json.dumps(right_compact, ensure_ascii=False, indent=2)}
+
+Retrieved diagnostics snippets for scope A:
 {json.dumps(left_context, ensure_ascii=False, indent=2)}
 
-Retrieved diagnostics for scope B:
+Retrieved diagnostics snippets for scope B:
 {json.dumps(right_context, ensure_ascii=False, indent=2)}
-
-Return:
-1. Executive comparison
-2. What changed
-3. Evidence from diagnostics
-4. Likely explanation
-5. Recommended action
-6. Confidence level (High / Medium / Low)
 """.strip()
 
 
 # ---------------------------------------------------------
 # LLM call
 # ---------------------------------------------------------
-def _call_llm(prompt: str) -> str:
+def _call_llm(prompt: str, mode: str = "diagnostic") -> str:
+    if mode == "chat":
+        system_text = (
+            "You are a helpful assistant inside a SQL Server observability app. "
+            "Reply naturally and briefly. "
+            "Do not use diagnostic report structure. "
+            "Do not invent server-specific evidence."
+        )
+    elif mode == "general":
+        system_text = (
+            "You are a senior SQL Server expert. "
+            "Answer clearly, directly, and naturally. "
+            "Do not force a diagnostic report structure. "
+            "Do not assume access to server-specific diagnostics unless explicitly provided."
+        )
+    else:
+        system_text = (
+            "You are a senior SQL Server performance engineer. "
+            "Use only the provided diagnostics evidence. "
+            "Do not invent metrics, waits, queries, dates, or settings."
+        )
+
     messages = [
         {
             "role": "system",
-            "content": (
-                "You are a senior SQL Server performance engineer. "
-                "Use only the provided diagnostics evidence. "
-                "Do not invent metrics, waits, queries, dates, or settings."
-            ),
+            "content": system_text,
         },
         {
             "role": "user",
@@ -530,7 +677,7 @@ def _call_llm(prompt: str) -> str:
             max_tokens=1800,
         )
     except Exception as e:
-        return f"AI analysis could not be generated from the retrieved diagnostics. Error: {e}"
+        return f"AI analysis could not be generated. Error: {e}"
 
 
 # ---------------------------------------------------------
@@ -542,18 +689,9 @@ def ask_server_ai(
     question: str,
     num_results: int = 12,
 ) -> Dict[str, Any]:
-    if VectorSearchClient is None:
-        return {
-            "answer": "Vector Search dependency is not installed in the app environment.",
-            "found": False,
-            "mode": "error",
-            "resolved_server": server_name,
-            "resolved_ingestion_date": ingestion_date,
-            "compare_servers": [],
-            "compare_dates": [],
-        }
+    q = (question or "").strip()
 
-    if not question or not question.strip():
+    if not q:
         return {
             "answer": "Please enter a question.",
             "found": False,
@@ -564,22 +702,59 @@ def ask_server_ai(
             "compare_dates": [],
         }
 
-    intent = _detect_query_intent(question)
+    # -----------------------------------------------------
+    # Mode 1: simple chat / lightweight conversational reply
+    # -----------------------------------------------------
+    if _is_non_diagnostic_chat(q):
+        q_norm = q.strip().lower()
+
+        if q_norm in {"hi", "hello", "hey", "good morning", "good afternoon", "good evening"}:
+            answer = "Hi — ask me about this server, compare ingestions, or ask a general SQL Server question."
+        elif q_norm in {"thanks", "thank you"}:
+            answer = "You’re welcome."
+        elif q_norm in {"ok", "okay"}:
+            answer = "Understood."
+        else:
+            answer = "Ask me about this server, compare ingestions, or ask a general SQL Server question."
+
+        return {
+            "answer": answer,
+            "found": False,
+            "mode": "chat",
+            "resolved_server": None,
+            "resolved_ingestion_date": None,
+            "compare_servers": [],
+            "compare_dates": [],
+        }
+
+    intent = _detect_query_intent(q)
+    q_lower = q.lower()
 
     # -----------------------------------------------------
-    # Comparison mode
+    # Mode 2: comparison path (server-grounded)
     # -----------------------------------------------------
-    if "compare" in question.lower():
-        compare_servers = _resolve_servers_for_compare(question, server_name)
+    if "compare" in q_lower:
+        if VectorSearchClient is None:
+            return {
+                "answer": "Comparison mode is unavailable because Vector Search dependency is not installed in the app environment.",
+                "found": False,
+                "mode": "error",
+                "resolved_server": server_name,
+                "resolved_ingestion_date": ingestion_date,
+                "compare_servers": [],
+                "compare_dates": [],
+            }
+
+        compare_servers = _resolve_servers_for_compare(q, server_name)
         compare_dates = _resolve_compare_dates(
-            question,
+            q,
             compare_servers[0] if compare_servers else server_name,
             ingestion_date,
         )
 
         # Compare two servers on one date
         if len(compare_servers) == 2 and not (compare_dates and len(compare_dates) == 2):
-            compare_date = _resolve_single_ingestion_date(question, compare_servers[0], ingestion_date)
+            compare_date = _resolve_single_ingestion_date(q, compare_servers[0], ingestion_date)
 
             left_filters: Dict[str, Any] = {"server_name": compare_servers[0]}
             right_filters: Dict[str, Any] = {"server_name": compare_servers[1]}
@@ -587,8 +762,8 @@ def ask_server_ai(
                 left_filters["ingestion_date"] = compare_date
                 right_filters["ingestion_date"] = compare_date
 
-            left_rows = _search_vector_index(question, left_filters, num_results=num_results)
-            right_rows = _search_vector_index(question, right_filters, num_results=num_results)
+            left_rows = _search_vector_index(q, left_filters, num_results=num_results)
+            right_rows = _search_vector_index(q, right_filters, num_results=num_results)
 
             left_rows = _rerank_rows_by_intent(left_rows, intent)
             right_rows = _rerank_rows_by_intent(right_rows, intent)
@@ -609,7 +784,7 @@ def ask_server_ai(
                 }
 
             prompt = _build_prompt_compare_scope(
-                question=question,
+                question=q,
                 intent=intent,
                 compare_servers=compare_servers,
                 compare_dates=[compare_date or "not specified", compare_date or "not specified"],
@@ -618,7 +793,7 @@ def ask_server_ai(
             )
 
             return {
-                "answer": _call_llm(prompt),
+                "answer": _call_llm(prompt, mode="diagnostic"),
                 "found": True,
                 "mode": "compare",
                 "resolved_server": None,
@@ -633,8 +808,8 @@ def ask_server_ai(
             left_filters = {"server_name": resolved_server, "ingestion_date": compare_dates[0]}
             right_filters = {"server_name": resolved_server, "ingestion_date": compare_dates[1]}
 
-            left_rows = _search_vector_index(question, left_filters, num_results=num_results)
-            right_rows = _search_vector_index(question, right_filters, num_results=num_results)
+            left_rows = _search_vector_index(q, left_filters, num_results=num_results)
+            right_rows = _search_vector_index(q, right_filters, num_results=num_results)
 
             left_rows = _rerank_rows_by_intent(left_rows, intent)
             right_rows = _rerank_rows_by_intent(right_rows, intent)
@@ -654,7 +829,7 @@ def ask_server_ai(
                 }
 
             prompt = _build_prompt_compare_scope(
-                question=question,
+                question=q,
                 intent=intent,
                 compare_servers=[resolved_server],
                 compare_dates=compare_dates,
@@ -663,7 +838,7 @@ def ask_server_ai(
             )
 
             return {
-                "answer": _call_llm(prompt),
+                "answer": _call_llm(prompt, mode="diagnostic"),
                 "found": True,
                 "mode": "compare",
                 "resolved_server": resolved_server,
@@ -673,32 +848,89 @@ def ask_server_ai(
             }
 
     # -----------------------------------------------------
-    # Single scope
+    # Mode 3: selected-server diagnostic path
+    # Only these intents should touch Delta/vector evidence.
     # -----------------------------------------------------
-    resolved_server = _resolve_server_from_question(question, server_name)
-    resolved_ingestion_date = _resolve_single_ingestion_date(
-        question=question,
-        resolved_server=resolved_server,
-        selected_ingestion_date=ingestion_date,
-    )
+    server_grounded_intents = {"cpu", "io", "waits", "queries", "memory", "tempdb"}
 
-    filters: Dict[str, Any] = {}
-    if resolved_server:
-        filters["server_name"] = resolved_server
-    if resolved_ingestion_date:
-        filters["ingestion_date"] = resolved_ingestion_date
+    if intent == "config":
+        config_server_signals = [
+            "this server",
+            "selected server",
+            "current server",
+            "our server",
+            "that server",
+            "on this server",
+            "for this server",
+            "configured",
+            "configuration here",
+            "setting here",
+            "current maxdop",
+            "cost threshold here",
+            "server memory here",
+        ]
 
-    rows = _search_vector_index(question, filters, num_results=num_results)
-    rows = _rerank_rows_by_intent(rows, intent, top_k=6)
+        mentions_selected_server = bool(server_name and server_name.lower() in q_lower)
 
-    if not rows:
+        if any(sig in q_lower for sig in config_server_signals) or mentions_selected_server:
+            intent = "config_server"
+        else:
+            intent = "config_general"
+
+    if intent in server_grounded_intents or intent == "config_server":
+        if VectorSearchClient is None:
+            return {
+                "answer": "Server-grounded diagnostics are unavailable because Vector Search dependency is not installed in the app environment.",
+                "found": False,
+                "mode": "error",
+                "resolved_server": server_name,
+                "resolved_ingestion_date": ingestion_date,
+                "compare_servers": [],
+                "compare_dates": [],
+            }
+
+        resolved_server = _resolve_server_from_question(q, server_name)
+        resolved_ingestion_date = _resolve_single_ingestion_date(
+            question=q,
+            resolved_server=resolved_server,
+            selected_ingestion_date=ingestion_date,
+        )
+
+        filters: Dict[str, Any] = {}
+        if resolved_server:
+            filters["server_name"] = resolved_server
+        if resolved_ingestion_date:
+            filters["ingestion_date"] = resolved_ingestion_date
+
+        rows = _search_vector_index(q, filters, num_results=num_results)
+        rows = _rerank_rows_by_intent(rows, intent, top_k=6)
+
+        if not rows:
+            return {
+                "answer": (
+                    "I couldn’t find enough matching diagnostics for that server question. "
+                    "Try mentioning the full server name, an ingestion date like 2026-03-15, "
+                    "or a narrower topic such as CPU, waits, I/O, memory, or queries."
+                ),
+                "found": False,
+                "mode": "single",
+                "resolved_server": resolved_server,
+                "resolved_ingestion_date": resolved_ingestion_date,
+                "compare_servers": [],
+                "compare_dates": [],
+            }
+
+        prompt = _build_prompt_single_scope(
+            question=q,
+            intent=intent,
+            resolved_server=resolved_server,
+            resolved_ingestion_date=resolved_ingestion_date,
+            rows=rows,
+        )
+
         return {
-            "answer": (
-                "I couldn’t find enough matching diagnostics for that question. "
-                "Try mentioning the full server name, an ingestion date like 2026-03-15, "
-                "or a narrower topic such as CPU, waits, I/O, memory, or queries."
-            ),
-            "found": False,
+            "answer": _call_llm(prompt, mode="diagnostic"),
+            "found": True,
             "mode": "single",
             "resolved_server": resolved_server,
             "resolved_ingestion_date": resolved_ingestion_date,
@@ -706,20 +938,28 @@ def ask_server_ai(
             "compare_dates": [],
         }
 
-    prompt = _build_prompt_single_scope(
-        question=question,
-        intent=intent,
-        resolved_server=resolved_server,
-        resolved_ingestion_date=resolved_ingestion_date,
-        rows=rows,
-    )
+    # -----------------------------------------------------
+    # Mode 4: general SQL / normal answer
+    # No Delta, no vector, no selected-server grounding.
+    # -----------------------------------------------------
+    general_prompt = f"""
+You are a senior SQL Server expert.
+
+Answer the user's question directly and naturally.
+Do not force a diagnostic report structure.
+Do not assume access to server-specific diagnostics unless the user explicitly asks about the selected server.
+Keep the answer clear, practical, and concise.
+
+User question:
+{q}
+""".strip()
 
     return {
-        "answer": _call_llm(prompt),
-        "found": True,
-        "mode": "single",
-        "resolved_server": resolved_server,
-        "resolved_ingestion_date": resolved_ingestion_date,
+        "answer": _call_llm(general_prompt, mode="general"),
+        "found": False,
+        "mode": "general",
+        "resolved_server": None,
+        "resolved_ingestion_date": None,
         "compare_servers": [],
         "compare_dates": [],
     }

@@ -102,8 +102,7 @@ Return a Markdown response with EXACTLY these sections and headings:
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def render_expensive_queries_tab(selected_server: str) -> None:
-    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
+def render_expensive_queries_tab(selected_server: str, selected_ingestion_date: str | None) -> None:
     st.subheader("Most Expensive Queries")
 
     if not selected_server:
@@ -211,7 +210,9 @@ def render_expensive_queries_tab(selected_server: str) -> None:
         st.dataframe(pd.DataFrame([row]), use_container_width=True, hide_index=True)
 
     with st.expander("Show full Top list for this Query Type", expanded=False):
-        st.dataframe(df.head(50), use_container_width=True, hide_index=True)
+        hide_cols = {"sheet_name"}
+        display_df = df[[c for c in df.columns if c not in hide_cols]].head(50)
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     # -------------------------
     # Analyze + Recommend

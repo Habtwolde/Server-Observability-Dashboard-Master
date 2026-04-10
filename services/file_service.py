@@ -1,18 +1,20 @@
-import io
 from db.connection import get_workspace_client, run_query
 
 
-def get_latest_file_path(server_name: str, ingestion_date: str | None = None) -> str:
+def get_latest_file_path(server_name: str, ingestion_date: str | None = None) -> str | None:
     """
     Return SQLDiagnostics file path for the selected server and ingestion snapshot.
     """
+    safe_server = str(server_name).replace("'", "''")
+    safe_ingestion_date = str(ingestion_date).replace("'", "''") if ingestion_date else None
+        
 
     if ingestion_date:
         query = f"""
         SELECT file_path
         FROM btris_dbx.observability.sql_diagnostics_files_delta
-        WHERE server_name = '{server_name}'
-        AND ingestion_date = DATE('{ingestion_date}')
+        WHERE server_name = '{safe_server}'
+        AND ingestion_date = DATE('{safe_ingestion_date}')
         ORDER BY snapshot_date DESC
         LIMIT 1
         """
@@ -20,7 +22,7 @@ def get_latest_file_path(server_name: str, ingestion_date: str | None = None) ->
         query = f"""
         SELECT file_path
         FROM btris_dbx.observability.sql_diagnostics_files_delta
-        WHERE server_name = '{server_name}'
+        WHERE server_name = '{safe_server}'
         ORDER BY snapshot_date DESC
         LIMIT 1
         """
@@ -35,7 +37,7 @@ def get_latest_file_path(server_name: str, ingestion_date: str | None = None) ->
 
 def load_file_bytes(path: str) -> bytes:
     """
-    Download file from DBFS or UC Volume using Databricks Files API
+    Download file bytes from DBFS or a UC Volume using the Databricks Files API.
     """
     w = get_workspace_client()
 

@@ -592,3 +592,176 @@ LIMIT 5
 # MAGIC   COUNT(*) AS null_bronze_rows
 # MAGIC FROM btris_dbx.observability.sql_diagnostics_bronze
 # MAGIC WHERE ingestion_date IS NULL;
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Ingest Windows Event Table
+# MAGIC
+
+# COMMAND ----------
+
+display(dbutils.fs.ls(f"{BASE_PATH}/raw/windows_events/inbox"))
+
+# COMMAND ----------
+
+import pandas as pd
+
+csv_path = f"{BASE_PATH}/raw/windows_events/inbox/AllServerEvents_2026-02-08.csv"
+df = pd.read_csv(csv_path, nrows=5)
+print(df.columns.tolist())
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE IF NOT EXISTS btris_dbx.observability.windows_events_bronze (
+# MAGIC   message STRING,
+# MAGIC   event_id STRING,
+# MAGIC   provider_name STRING,
+# MAGIC   log_name STRING,
+# MAGIC   servername STRING,
+# MAGIC   time_created STRING,
+# MAGIC   container_log STRING,
+# MAGIC   level_display_name STRING,
+# MAGIC   created_date STRING,
+# MAGIC   source_file_name STRING,
+# MAGIC   ingestion_date DATE,
+# MAGIC   ingested_ts TIMESTAMP,
+# MAGIC   row_json STRING
+# MAGIC )
+# MAGIC USING DELTA;
+
+# COMMAND ----------
+
+import json
+import pandas as pd
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, DateType
+
+csv_path = f"{BASE_PATH}/raw/windows_events/inbox/AllServerEvents_2026-02-08.csv"
+pdf = pd.read_csv(csv_path)
+
+pdf.columns = [str(c).strip() for c in pdf.columns]
+pdf = pdf.dropna(how="all").dropna(axis=1, how="all")
+
+rows = []
+for rec in pdf.to_dict(orient="records"):
+    safe = {str(k): (None if pd.isna(v) else v) for k, v in rec.items()}
+    rows.append((
+        str(safe.get("Message")) if safe.get("Message") is not None else None,
+        str(safe.get("ID")) if safe.get("ID") is not None else None,
+        str(safe.get("ProviderName")) if safe.get("ProviderName") is not None else None,
+        str(safe.get("LogName")) if safe.get("LogName") is not None else None,
+        str(safe.get("servername")) if safe.get("servername") is not None else None,
+        str(safe.get("TimeCreated")) if safe.get("TimeCreated") is not None else None,
+        str(safe.get("ContainerLog")) if safe.get("ContainerLog") is not None else None,
+        str(safe.get("LevelDisplayName")) if safe.get("LevelDisplayName") is not None else None,
+        str(safe.get("CreatedDate")) if safe.get("CreatedDate") is not None else None,
+        "AllServerEvents_2026-02-08.csv",
+        json.dumps(safe, default=str)
+    ))
+
+schema = StructType([
+    StructField("message", StringType(), True),
+    StructField("event_id", StringType(), True),
+    StructField("provider_name", StringType(), True),
+    StructField("log_name", StringType(), True),
+    StructField("servername", StringType(), True),
+    StructField("time_created", StringType(), True),
+    StructField("container_log", StringType(), True),
+    StructField("level_display_name", StringType(), True),
+    StructField("created_date", StringType(), True),
+    StructField("source_file_name", StringType(), True),
+    StructField("row_json", StringType(), True),
+])
+
+sdf = (
+    spark.createDataFrame(rows, schema=schema)
+    .withColumn("ingestion_date", F.current_date())
+    .withColumn("ingested_ts", F.current_timestamp())
+)
+
+display(sdf.limit(10))
+
+# COMMAND ----------
+
+BRONZE_TABLE = "btris_dbx.observability.windows_events_bronze"
+
+sdf.write.mode("append").format("delta").saveAsTable(BRONZE_TABLE)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   servername,
+# MAGIC   COUNT(*) AS event_count
+# MAGIC FROM btris_dbx.observability.windows_events_bronze
+# MAGIC GROUP BY servername
+# MAGIC ORDER BY event_count DESC;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT
+# MAGIC   servername,
+# MAGIC   level_display_name,
+# MAGIC   provider_name,
+# MAGIC   event_id,
+# MAGIC   message
+# MAGIC FROM btris_dbx.observability.windows_events_bronze
+# MAGIC WHERE servername = 'HC1DBSQ67PV'
+# MAGIC LIMIT 20;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE TABLE IF NOT EXISTS btris_dbx.observability.windows_events_files_delta (
+# MAGIC   source_file_name STRING,
+# MAGIC   source_file_path STRING,
+# MAGIC   file_size_bytes BIGINT,
+# MAGIC   modified_ts TIMESTAMP,
+# MAGIC   ingestion_date DATE,
+# MAGIC   ingested_ts TIMESTAMP
+# MAGIC )
+# MAGIC USING DELTA;
+
+# COMMAND ----------
+
+from pyspark.sql import functions as F
+from pyspark.sql.types import StructType, StructField, StringType, LongType
+
+REG_TABLE = "btris_dbx.observability.windows_events_files_delta"
+INBOX = f"{BASE_PATH}/raw/windows_events/inbox"
+
+items = [x for x in dbutils.fs.ls(INBOX) if x.path.lower().endswith(".csv")]
+
+rows = []
+for it in items:
+    rows.append((it.name, it.path, int(it.size), int(it.modificationTime)))
+
+schema = StructType([
+    StructField("source_file_name", StringType(), False),
+    StructField("source_file_path", StringType(), False),
+    StructField("file_size_bytes", LongType(), True),
+    StructField("modified_time_ms", LongType(), True),
+])
+
+df = spark.createDataFrame(rows, schema=schema)
+
+df = (
+    df.withColumn("modified_ts", (F.col("modified_time_ms") / 1000).cast("timestamp"))
+      .withColumn("ingestion_date", F.current_date())
+      .withColumn("ingested_ts", F.current_timestamp())
+      .drop("modified_time_ms")
+)
+
+df.write.mode("append").format("delta").saveAsTable(REG_TABLE)
+
+display(spark.sql(f"SELECT * FROM {REG_TABLE} ORDER BY ingested_ts DESC"))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT *
+# MAGIC FROM btris_dbx.observability.windows_events_files_delta
+# MAGIC ORDER BY ingested_ts DESC;

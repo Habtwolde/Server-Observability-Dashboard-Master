@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -125,7 +125,6 @@ def _fetch_sheet_for_ingestion(
     df = metrics_service._fetch_sheet(server_name, snapshot, sheet_name)
     return df, snapshot
 
-@st.cache_data(show_spinner=False, ttl=300)
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_latest_expensive_queries(
     server_name: str,

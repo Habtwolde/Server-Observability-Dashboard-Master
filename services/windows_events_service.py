@@ -105,131 +105,86 @@ def _map_severity_to_level(v: Any) -> str:
 
 @st.cache_data(show_spinner=False, ttl=300)
 def fetch_windows_events(server: str, thresholds: EventThresholds = EventThresholds()) -> Tuple[pd.DataFrame, Dict[str, Any]]:
-    snapshot = _get_latest_snapshot(server)
-    if not snapshot:
+    q = f"""
+    SELECT
+      message,
+      event_id,
+      provider_name,
+      log_name,
+      servername,
+      time_created,
+      container_log,
+      level_display_name,
+      created_date,
+      source_file_name,
+      ingestion_date,
+      ingested_ts
+    FROM btris_dbx.observability.windows_events_bronze
+    WHERE lower(servername) = lower('{server}')
+    """
+
+    df = run_query(q)
+
+    if df.empty:
         return pd.DataFrame(), {
-            "snapshot": None, "sources": [],
-            "alerts_total": 0, "alerts_error": 0, "alerts_warning": 0, "alerts_info": 0,
-            "cpu_max": None, "cpu_spikes_warning": 0, "cpu_spikes_critical": 0,
+            "snapshot": None,
+            "sources": ["windows_events_bronze"],
+            "alerts_total": 0,
+            "alerts_error": 0,
+            "alerts_warning": 0,
+            "alerts_info": 0,
+            "cpu_max": None,
+            "cpu_spikes_warning": 0,
+            "cpu_spikes_critical": 0,
+            "server_found": False,
+            "requested_server": server,
         }
 
-    alerts_df = _fetch_sheet(server, snapshot, AGENT_ALERTS_SHEET)
-    alerts_events = pd.DataFrame()
+    events = pd.DataFrame({
+        "time_created": df["time_created"].astype(str) if "time_created" in df.columns else "",
+        "level": df["level_display_name"].fillna("Info").astype(str) if "level_display_name" in df.columns else "Info",
+        "provider": df["provider_name"].astype(str) if "provider_name" in df.columns else "",
+        "id": df["event_id"].astype(str) if "event_id" in df.columns else "",
+        "message": df["message"].astype(str) if "message" in df.columns else "",
+        "snapshot_date": df["ingestion_date"].astype(str) if "ingestion_date" in df.columns else "",
+        "log_name": df["log_name"].astype(str) if "log_name" in df.columns else "",
+        "container_log": df["container_log"].astype(str) if "container_log" in df.columns else "",
+        "servername": df["servername"].astype(str) if "servername" in df.columns else "",
+    })
 
-    if not alerts_df.empty:
-        cols = list(alerts_df.columns)
-        name_col = _pick_col(cols, ["name", "alert name", "alert"])
-        provider_col = _pick_col(cols, ["event_source", "event source", "source", "provider"])
-        severity_col = _pick_col(cols, ["severity", "alert severity", "error severity", "level"])
-        date_col = _pick_col(cols, ["last_occurrence_date", "last occurrence date", "last_occurrence", "last occurrence"])
-        time_col = _pick_col(cols, ["last_occurrence_time", "last occurrence time", "occurrence time", "time"])
-
-        if date_col and time_col:
-            time_created = alerts_df[date_col].astype(str).str.strip() + " " + alerts_df[time_col].astype(str).str.strip()
-        elif date_col:
-            time_created = alerts_df[date_col].astype(str)
-        else:
-            time_created = pd.Series([snapshot] * len(alerts_df))
-
-        levels = alerts_df[severity_col].map(_map_severity_to_level) if severity_col else pd.Series(["Info"] * len(alerts_df))
-        provider = alerts_df[provider_col].astype(str) if provider_col else pd.Series(["SQL Agent"] * len(alerts_df))
-        alert_name = alerts_df[name_col].astype(str) if name_col else pd.Series(["SQL Agent Alert"] * len(alerts_df))
-
-        alerts_events = pd.DataFrame({
-            "time_created": time_created,
-            "level": levels,
-            "provider": provider,
-            "id": alert_name,
-            "message": "SQL Agent Alert: " + alert_name,
-            "source_sheet": AGENT_ALERTS_SHEET,
-            "snapshot_date": snapshot,
-        })
-
-    cpu_df = _fetch_sheet(server, snapshot, CPU_HISTORY_SHEET)
-    cpu_events = pd.DataFrame()
-    cpu_max = None
-    cpu_warn = 0
-    cpu_crit = 0
-
-    if not cpu_df.empty:
-        cols = list(cpu_df.columns)
-        cpu_col = _pick_col(cols, ["SQL Server Process CPU Utilization", "sql server process cpu utilization", "sql cpu", "sqlserver cpu"])
-        time_col = _pick_col(cols, ["Event Time", "event time", "time", "timestamp"])
-
-        if cpu_col:
-            cpu_series = pd.to_numeric(cpu_df[cpu_col], errors="coerce")
-            cpu_max = float(cpu_series.max()) if cpu_series.notna().any() else None
-
-            level = pd.Series(["Info"] * len(cpu_df))
-            level = level.where(cpu_series < thresholds.cpu_warning, "Warning")
-            level = level.where(cpu_series < thresholds.cpu_critical, "Error")
-
-            is_spike = cpu_series >= thresholds.cpu_warning
-            cpu_warn = int(((cpu_series >= thresholds.cpu_warning) & (cpu_series < thresholds.cpu_critical)).sum())
-            cpu_crit = int((cpu_series >= thresholds.cpu_critical).sum())
-
-            when = cpu_df[time_col].astype(str) if time_col else pd.Series([snapshot] * len(cpu_df))
-            cpu_events = pd.DataFrame({
-                "time_created": when[is_spike].reset_index(drop=True),
-                "level": level[is_spike].reset_index(drop=True),
-                "provider": ["Performance Monitor"] * int(is_spike.sum()),
-                "id": ["CPU_SPIKE"] * int(is_spike.sum()),
-                "message": (cpu_series[is_spike].round(2).astype(str).radd("SQL Server CPU reached ").add("%")).reset_index(drop=True),
-                "source_sheet": CPU_HISTORY_SHEET,
-                "snapshot_date": snapshot,
-            })
-
-    events = pd.concat([alerts_events, cpu_events], ignore_index=True)
     if not events.empty and "time_created" in events.columns:
-        events = events.sort_values(by=["time_created", "level"], ascending=[False, True], kind="mergesort").reset_index(drop=True)
+        events = events.sort_values(by=["time_created"], ascending=[False], kind="mergesort").reset_index(drop=True)
 
-    def _count_level(df: pd.DataFrame, lvl: str) -> int:
-        if df.empty:
+    def _count_level(df_: pd.DataFrame, lvl: str) -> int:
+        if df_.empty:
             return 0
-        return int((df["level"] == lvl).sum())
+        return int(df_["level"].astype(str).str.lower().eq(lvl.lower()).sum())
 
-    alerts_total = int(len(alerts_events)) if not alerts_events.empty else 0
     summary = {
-        "snapshot": snapshot,
-        "sources": [s for s, ok in [
-            (AGENT_ALERTS_SHEET, alerts_total > 0),
-            (CPU_HISTORY_SHEET, (cpu_warn + cpu_crit) > 0),
-        ] if ok],
-        "alerts_total": alerts_total,
-        "alerts_error": _count_level(alerts_events, "Error"),
-        "alerts_warning": _count_level(alerts_events, "Warning"),
-        "alerts_info": _count_level(alerts_events, "Info"),
-        "cpu_max": cpu_max,
-        "cpu_spikes_warning": cpu_warn,
-        "cpu_spikes_critical": cpu_crit,
+        "snapshot": None,
+        "sources": ["windows_events_bronze"],
+        "alerts_total": int(len(events)),
+        "alerts_error": _count_level(events, "Error"),
+        "alerts_warning": _count_level(events, "Warning"),
+        "alerts_info": _count_level(events, "Information") + _count_level(events, "Info"),
+        "cpu_max": None,
+        "cpu_spikes_warning": 0,
+        "cpu_spikes_critical": 0,
     }
+
+    summary["server_found"] = True
+    summary["requested_server"] = server
 
     return events, summary
 
 def build_summary_context(summary: Dict[str, Any]) -> str:
-    snap = summary.get("snapshot")
-    if not snap:
-        return "No snapshot was found for this server in v_latest_sql_diagnostics."
+    total = summary.get("alerts_total", 0)
+    err = summary.get("alerts_error", 0)
+    warn = summary.get("alerts_warning", 0)
+    info = summary.get("alerts_info", 0)
 
-    alerts_total = summary.get("alerts_total", 0)
-    a_err = summary.get("alerts_error", 0)
-    a_warn = summary.get("alerts_warning", 0)
-    cpu_max = summary.get("cpu_max", None)
-    cpu_w = summary.get("cpu_spikes_warning", 0)
-    cpu_c = summary.get("cpu_spikes_critical", 0)
-
-    parts: List[str] = []
-    parts.append(f"Latest snapshot: {snap}.")
-    parts.append(f"SQL Agent alerts: {alerts_total} (Error: {a_err}, Warning: {a_warn}).")
-
-    if cpu_max is None:
-        parts.append("CPU telemetry was not available for this snapshot.")
-    else:
-        parts.append(f"Max SQL Server CPU observed: {cpu_max:.2f}%.")
-        if (cpu_w + cpu_c) == 0:
-            parts.append("No CPU spike incidents were detected using the current thresholds.")
-        else:
-            parts.append(f"CPU spike incidents detected: {cpu_w + cpu_c} (Critical: {cpu_c}, Warning: {cpu_w}).")
-
-    parts.append("Note: This tab synthesizes an Event Viewer-style view from the available diagnostics sheets; it is not a direct Windows Event Log ingest.")
-    return " ".join(parts)
+    return (
+        f"Windows Events found: {total}. "
+        f"Errors: {err}. Warnings: {warn}. Informational: {info}. "
+        f"Source: uploaded Windows Events CSV."
+    )

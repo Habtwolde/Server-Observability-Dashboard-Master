@@ -1,5 +1,5 @@
 # ui/overview_tab.py
-# Executive Overview Tab (Modern SaaS UI - Option C)
+# Executive Overview Tab (Executive Dashboard UI)
 
 from __future__ import annotations
 
@@ -11,163 +11,322 @@ from services.file_service import get_latest_file_path, load_file_bytes
 
 _CSS = r"""
 <style>
-/* =========================
-   Overview Tab UI (Option C)
-   - Modern SaaS / glassy panels
-   - Section-based layout (no "one big container" feel)
-   - Light, consistent spacing and typography
-   ========================= */
-
 :root{
-  --radius-xl: 22px;
+  --radius-xl: 24px;
   --radius-lg: 18px;
   --radius-md: 14px;
+  --radius-sm: 10px;
 
-  --border: rgba(0,0,0,0.08);
-  --border-strong: rgba(0,0,0,0.10);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.12);
 
-  --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
-  --shadow-md: 0 10px 30px rgba(0,0,0,0.06);
+  --surface: #ffffff;
+  --surface-soft: #f8fafc;
+  --surface-muted: #f1f5f9;
+  --surface-accent: #eef2ff;
 
-  --glass: rgba(255,255,255,0.60);
-  --glass-strong: rgba(255,255,255,0.74);
-  --glass-solid: rgba(255,255,255,0.92);
+  --text-strong: #0f172a;
+  --text-mid: #334155;
+  --text-dim: #64748b;
 
-  --text-dim: rgba(0,0,0,0.74);
-  --text-mid: rgba(0,0,0,0.82);
-  --text-strong: rgba(0,0,0,0.92);
+  --ok-bg: rgba(22, 163, 74, 0.10);
+  --warn-bg: rgba(245, 158, 11, 0.12);
+  --bad-bg: rgba(239, 68, 68, 0.10);
+
+  --ok-border: rgba(22, 163, 74, 0.22);
+  --warn-border: rgba(245, 158, 11, 0.24);
+  --bad-border: rgba(239, 68, 68, 0.24);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.06);
 }
 
-/* Streamlit spacing: keep safe top padding but do not over-control */
-div[data-testid="stAppViewContainer"] > .main { padding-top: 1.6rem !important; }
-.block-container { padding-top: 1.6rem !important; padding-bottom: 1.2rem !important; }
+div[data-testid="stAppViewContainer"] > .main {
+  padding-top: 1.35rem !important;
+}
+.block-container {
+  padding-top: 1.35rem !important;
+  padding-bottom: 1.2rem !important;
+  max-width: 1400px;
+}
 
-/* Typography */
-h1, h2, h3, h4 { margin: 0.35rem 0 0.6rem 0 !important; letter-spacing: -0.01em; }
-p { margin: 0.25rem 0 !important; }
+h1, h2, h3, h4 {
+  color: var(--text-strong);
+  letter-spacing: -0.02em;
+}
 
-/* Pills */
+p, li, label {
+  color: var(--text-mid);
+}
+
+.exec-hero {
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 18px 20px;
+  box-shadow: none;
+}
+
+.exec-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.exec-title {
+  font-size: 1.95rem;
+  font-weight: 820;
+  color: var(--text-strong);
+  line-height: 1.15;
+  margin: 0;
+}
+
+.exec-subtitle {
+  margin-top: 6px;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+}
+
 .health-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 10px;
+  padding: 5px 12px;
   border-radius: 999px;
   border: 1px solid var(--border);
   font-size: 0.78rem;
+  font-weight: 700;
   color: var(--text-mid);
-  background: var(--glass-solid);
-  vertical-align: middle;
-  margin-left: 10px;
+  background: #fff;
 }
-.health-pill.ok { background: rgba(24, 201, 100, 0.12); }
-.health-pill.warn { background: rgba(255, 170, 0, 0.14); }
-.health-pill.bad { background: rgba(255, 70, 70, 0.12); }
+.health-pill.ok {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+}
+.health-pill.warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
+.health-pill.bad {
+  background: var(--bad-bg);
+  border-color: var(--bad-border);
+}
 
-/* Section divider */
-.hr {
+.section-divider {
   height: 1px;
-  background: rgba(0,0,0,0.08);
-  margin: 12px 0 14px 0;
+  background: var(--border);
+  margin: 18px 0 16px 0;
 }
 
-/* Panel: glassy but crisp */
+.section-heading {
+  font-size: 1.08rem;
+  font-weight: 800;
+  color: var(--text-strong);
+  margin: 0 0 10px 0;
+}
+
 .panel {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  padding: 14px 16px;
-  background: linear-gradient(180deg, var(--glass-strong) 0%, var(--glass) 100%);
+  padding: 16px 18px;
+  background: var(--surface);
   box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
+
+.panel-soft {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: 16px 18px;
+  background: linear-gradient(180deg, var(--surface-soft) 0%, #ffffff 100%);
+  box-shadow: var(--shadow-sm);
+}
+
 .panel-title {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-weight: 820;
-  font-size: 1.02rem;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 1.0rem;
   color: var(--text-strong);
   margin-bottom: 6px;
 }
+
 .panel-subtle {
   color: var(--text-dim);
-  font-size: 0.88rem;
+  font-size: 0.9rem;
 }
 
-/* KPI tile */
+.exec-insight {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
+  background: linear-gradient(180deg, #ffffff 0%, var(--surface-soft) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.exec-insight-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  color: var(--text-strong);
+  margin-bottom: 4px;
+}
+
+.exec-insight-text {
+  color: var(--text-mid);
+  line-height: 1.5;
+}
+
 .kpi {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 12px 14px 10px 14px;
-  background: var(--glass-solid);
+  padding: 14px 16px 12px 16px;
+  background: var(--surface);
   box-shadow: var(--shadow-sm);
+  min-height: 116px;
 }
-.kpi .label { font-size: 0.82rem; opacity: 0.78; font-weight: 720; }
-.kpi .value { font-size: 1.65rem; font-weight: 860; line-height: 1.10; margin-top: 2px; color: var(--text-strong); }
-.kpi .hint  { font-size: 0.80rem; opacity: 0.70; margin-top: 2px; color: var(--text-dim); }
-
-.kpi.ok   { border-color: rgba(24, 201, 100, 0.22); }
-.kpi.warn { border-color: rgba(255, 170, 0, 0.26); }
-.kpi.bad  { border-color: rgba(255, 70, 70, 0.24); }
-
-/* Insight strip (lightweight) */
-.insight {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  padding: 12px 14px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.62) 100%);
-  box-shadow: var(--shadow-sm);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+.kpi .label {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-weight: 750;
 }
-.insight-title { font-weight: 860; color: var(--text-strong); display:flex; align-items:center; gap:8px; }
-.insight-text  { margin-top: 2px; color: var(--text-mid); opacity: 0.92; }
+.kpi .value {
+  font-size: 1.9rem;
+  font-weight: 860;
+  line-height: 1.08;
+  margin-top: 6px;
+  color: var(--text-strong);
+}
+.kpi .hint {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
 
-/* Waits table with modern bars */
+.kpi.ok { border-color: var(--ok-border); }
+.kpi.warn { border-color: var(--warn-border); }
+.kpi.bad { border-color: var(--bad-border); }
+
+.metric-panel {
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: var(--surface);
+  box-shadow: none;
+  height: 100%;
+}
+
+.metric-block-title {
+  font-weight: 800;
+  color: var(--text-strong);
+  margin-bottom: 10px;
+}
+
 .waits-table {
   width: 100%;
   border-collapse: collapse;
   margin-top: 8px;
 }
 .waits-table th, .waits-table td {
-  padding: 8px 10px;
-  border-top: 1px solid rgba(0,0,0,0.07);
+  padding: 9px 10px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
   font-size: 0.88rem;
   vertical-align: middle;
 }
 .waits-table thead th {
   border-top: none;
-  opacity: 0.70;
   font-weight: 760;
-  background: rgba(0,0,0,0.03);
+  color: var(--text-dim);
+  background: var(--surface-muted);
 }
-.wait-type { font-weight: 740; color: var(--text-strong); }
-.wait-type.top { font-weight: 900; }
+.wait-type {
+  font-weight: 760;
+  color: var(--text-strong);
+}
+.wait-type.top {
+  font-weight: 900;
+}
 .badge-mini {
   display: inline-block;
   padding: 1px 8px;
   border-radius: 999px;
   font-size: 0.72rem;
+  font-weight: 700;
   border: 1px solid var(--border);
-  background: rgba(255,255,255,0.75);
-  color: var(--text-mid);
+  background: #fff;
+  color: var(--text-dim);
   margin-left: 6px;
 }
 .bar-wrap {
   height: 10px;
-  background: rgba(0,0,0,0.06);
+  background: rgba(15, 23, 42, 0.08);
   border-radius: 999px;
   overflow: hidden;
 }
 .bar-fill {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, rgba(0,0,0,0.12) 0%, rgba(0,0,0,0.34) 100%);
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.20) 0%, rgba(59, 130, 246, 0.62) 100%);
 }
 
-/* Dataframe header subtle (if used elsewhere) */
-div[data-testid="stDataFrame"] thead tr th { background: rgba(0,0,0,0.03) !important; }
+.ai-shell {
+  border: 1px solid rgba(15, 23, 42, 0.05);
+  border-radius: 14px;
+  padding: 14px 16px;
+  background: #ffffff;
+  box-shadow: none;
+}
+
+.ai-history {
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid rgba(15, 23, 42, 0.04);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(248, 250, 252, 0.55);
+}
+
+.ai-turn {
+  padding: 0 0 8px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ai-turn:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.ai-turn-role {
+  font-weight: 800;
+  color: var(--text-strong);
+  margin-bottom: 5px;
+}
+
+.ai-scope {
+  margin-top: 6px;
+  font-size: 0.84rem;
+  color: var(--text-dim);
+}
+
+.ai-answer-label {
+  margin-top: 8px;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
+.ai-input-note {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+div[data-testid="stDataFrame"] thead tr th {
+  background: var(--surface-muted) !important;
+}
 </style>
 """
 
@@ -251,26 +410,6 @@ def _kpi_tile_html(label, value, hint, klass="ok"):
         <div class="value">{value}</div>
         <div class="hint">{hint}</div>
     </div>"""
-
-
-def _download_button(selected_server: str):
-    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
-    file_path = get_latest_file_path(selected_server, selected_ingestion_date)
-
-    if not file_path:
-        return
-    try:
-        file_bytes = load_file_bytes(file_path)
-        st.download_button(
-            "Download Server Information",
-            data=file_bytes,
-            file_name=f"{selected_server}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-    except Exception:
-        pass
-
 
 def _build_exec_insight(cpu_pct, mem_pct, ple_s, io_stats: dict):
     signals = []
@@ -398,168 +537,143 @@ def _render_ai_assistant(selected_server: str, selected_ingestion_date: str | No
     from services.ai_service import ask_server_ai
 
     scope_key = f"{selected_server}::{selected_ingestion_date}"
-    q_key = f"ai_question::{scope_key}"
-    h_key = f"ai_history::{scope_key}"
-    r_key = f"ai_result::{scope_key}"
+    input_key = f"ai_input::{scope_key}"
+    turns_key = f"ai_turns::{scope_key}"
+    clear_flag_key = f"{input_key}__clear"
 
-    history = st.session_state.setdefault(h_key, [])
-    result = st.session_state.get(r_key)
+    turns = st.session_state.setdefault(turns_key, [])
 
-    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    if st.session_state.get(clear_flag_key):
+        st.session_state[input_key] = ""
+        st.session_state[clear_flag_key] = False
+
     st.markdown("### 🤖 AI Diagnostic Assistant")
 
     st.markdown(
         """
-        <div class="panel">
-        <div class="panel-title">🤖 AI Server Assistant</div>
-        <div class="panel-subtle">
-            Ask about this server snapshot, compare ingestions, or compare servers.
-        </div>
+        <div class="ai-shell">
+          <div class="panel-title">🤖 AI Server Assistant</div>
+          <div class="panel-subtle">
+            Ask targeted questions about this snapshot, compare ingestions, or compare servers.
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
-    q_col, clear_col = st.columns([6.0, 1.2], gap="small")
-    with q_col:
-        question = st.text_input(
+    if turns:
+        st.markdown('<div class="ai-history">', unsafe_allow_html=True)
+
+        for turn in turns:
+            question = str(turn.get("question") or "")
+            answer = str(turn.get("answer") or "")
+            found = bool(turn.get("found", False))
+            mode = str(turn.get("mode") or "single")
+
+            st.markdown('<div class="ai-turn">', unsafe_allow_html=True)
+            st.markdown('<div class="ai-turn-role">🧑 You</div>', unsafe_allow_html=True)
+            st.write(question)
+
+            scope_parts = []
+            if mode == "compare":
+                compare_servers = turn.get("compare_servers") or []
+                compare_dates = turn.get("compare_dates") or []
+                if compare_servers:
+                    scope_parts.append(f"Servers: {', '.join(compare_servers)}")
+                if compare_dates:
+                    scope_parts.append(f"Dates: {', '.join(compare_dates)}")
+            elif mode == "single":
+                if turn.get("resolved_server"):
+                    scope_parts.append(f"Server: {turn['resolved_server']}")
+                if turn.get("resolved_ingestion_date"):
+                    scope_parts.append(f"Ingestion Date: {turn['resolved_ingestion_date']}")
+
+            if scope_parts:
+                st.markdown(
+                    f'<div class="ai-scope">Resolved Scope: {" • ".join(scope_parts)}</div>',
+                    unsafe_allow_html=True,
+                )            
+
+            if mode == "chat":
+                answer_label = "💬 Assistant"
+            elif mode == "general":
+                answer_label = "💬 Response"
+            elif mode == "compare":
+                answer_label = "📊 Comparison"
+            else:
+                answer_label = "🧠 Diagnostic Insight"
+
+            st.markdown(
+                f'<div class="ai-answer-label">{answer_label}</div>',
+                unsafe_allow_html=True,
+            )            
+            if found:
+                st.markdown(answer)
+            else:
+                st.info(answer)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+
+    entry_col, action_col = st.columns([6.0, 1.25], gap="small")
+
+    with entry_col:
+        st.text_input(
             "Ask about this server",
             placeholder="Why is CPU high? Compare latest and previous ingestion. What waits dominate hc1dbsq36pv?",
-            key=q_key,
+            key=input_key,
             label_visibility="visible",
         )
-    with clear_col:
+        st.caption("Use concise, server-specific questions for best results.")
+
+    with action_col:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("Clear", key=f"clear_ai::{scope_key}", use_container_width=True):
-            st.session_state[q_key] = ""
-            st.session_state[r_key] = None
-            st.session_state[h_key] = []
-            st.rerun()
+        ask_clicked = st.button("Ask AI", key=f"ask_ai::{scope_key}", use_container_width=True)
+        clear_clicked = st.button("Clear", key=f"clear_ai::{scope_key}", use_container_width=True)
 
+    if clear_clicked:
+        st.session_state[turns_key] = []
+        st.session_state[clear_flag_key] = True
+        st.rerun()
 
-    #     q_col, clear_col = st.columns([6.0, 1.2], gap="small")
-    # with q_col:
-    #     question = st.text_input(
-    #         "Ask about this server",
-    #         placeholder="Why is CPU high? Compare latest and previous ingestion. What waits dominate hc1dbsq36pv?",
-    #         key=q_key,
-    #         label_visibility="visible",
-    #     )
+    q = (st.session_state.get(input_key) or "").strip()
 
-    # with clear_col:
-    #     st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-    #     if st.button("Clear", key=f"clear_ai::{scope_key}", use_container_width=True):
-    #         st.session_state[q_key] = ""
-    #         st.session_state[r_key] = None
-    #         st.session_state[h_key] = []
-    #         st.rerun()
+    if ask_clicked:
+        if not q:
+            st.info("Please enter a question.")
+            return
 
-    ai_progress_slot = st.empty()
+        with st.spinner("Analyzing diagnostics with AI..."):
+            response = ask_server_ai(
+                server_name=selected_server,
+                ingestion_date=selected_ingestion_date,
+                question=q,
+            )
 
-    if question and question.strip():
-        if not result or result.get("question") != question.strip():
-            with ai_progress_slot.container():
-                st.markdown(
-                    """
-<div class="insight">
-  <div class="insight-title">⏳ Analyzing your question...</div>
-  <div class="insight-text">
-    Searching diagnostics, resolving scope, and preparing analysis.
-  </div>
-</div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            with st.spinner("Analyzing diagnostics with AI..."):
-                response = ask_server_ai(
-                    server_name=selected_server,
-                    ingestion_date=selected_ingestion_date,
-                    question=question.strip(),
-                )
-
-            ai_progress_slot.empty()
-
-            result = {
-                "question": question.strip(),
-                **response,
+        turns.append(
+            {
+                "question": q,
+                "answer": response.get("answer", ""),
+                "found": response.get("found", False),
+                "mode": response.get("mode", "single"),
+                "resolved_server": response.get("resolved_server"),
+                "resolved_ingestion_date": response.get("resolved_ingestion_date"),
+                "compare_servers": response.get("compare_servers", []),
+                "compare_dates": response.get("compare_dates", []),
             }
-            st.session_state[r_key] = result
+        )
 
-            history.append(
-                {
-                    "question": result["question"],
-                    "answer": result["answer"],
-                    "found": result["found"],
-                    "mode": result["mode"],
-                    "resolved_server": result.get("resolved_server"),
-                    "resolved_ingestion_date": result.get("resolved_ingestion_date"),
-                    "compare_servers": result.get("compare_servers", []),
-                    "compare_dates": result.get("compare_dates", []),
-                }
-            )
-            st.session_state[h_key] = history[-5:]
-    result = st.session_state.get(r_key)
-
-    if result:
-        scope_parts = []
-
-        if result.get("mode") == "compare":
-            compare_servers = result.get("compare_servers") or []
-            compare_dates = result.get("compare_dates") or []
-
-            if compare_servers:
-                scope_parts.append(f"**Servers:** {', '.join(compare_servers)}")
-            if compare_dates:
-                scope_parts.append(f"**Dates:** {', '.join(compare_dates)}")
-        else:
-            if result.get("resolved_server"):
-                scope_parts.append(f"**Server:** {result['resolved_server']}")
-            if result.get("resolved_ingestion_date"):
-                scope_parts.append(f"**Ingestion Date:** {result['resolved_ingestion_date']}")
-
-        if scope_parts:
-            st.markdown(
-                f"""
-<div class="insight">
-  <div class="insight-title">Resolved Scope</div>
-  <div class="insight-text">{' &nbsp;•&nbsp; '.join(scope_parts)}</div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-        if result.get("found"):
-            st.markdown(
-                """
-<div class="panel">
-  <div class="panel-title">🧠 AI Analysis</div>
-</div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown(result["answer"])
-        else:
-            st.info(result["answer"])
-
-    if history:
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-        with st.expander("Recent AI questions", expanded=False):
-            for i, item in enumerate(reversed(history[-5:]), start=1):
-                st.markdown(f"**{i}. {item['question']}**")
-                if item.get("found"):
-                    preview = item["answer"][:300] + ("..." if len(item["answer"]) > 300 else "")
-                    st.markdown(preview)
-                else:
-                    st.caption(item["answer"])
-                st.markdown("---")
+        st.session_state[turns_key] = turns[-10:]
+        st.session_state[clear_flag_key] = True
+        st.rerun()
 
 
-def render_overview(selected_server: str):
-    selected_ingestion_date = st.session_state.get("selected_ingestion_date")
+def render_overview(selected_server: str, selected_ingestion_date: str | None):
     st.markdown(_CSS, unsafe_allow_html=True)
 
     cache = st.session_state.setdefault("_overview_profile_cache", {})
@@ -596,28 +710,35 @@ def render_overview(selected_server: str):
 
     health_label, health_class = _health(cpu_pct, mem_pct, ple_s)
 
-    left, right = st.columns([4.5, 1.2])
+    st.markdown('<div class="exec-hero">', unsafe_allow_html=True)
+    left, right = st.columns([4.7, 1.15])
     with left:
         st.markdown(
-            f"### {sql_banner} • {edition} "
-            f"<span class='health-pill {health_class}'>{health_label}</span>",
+            f"""
+            <div class="exec-title">
+              {sql_banner} • {edition}
+              <span class="health-pill {health_class}">{health_label}</span>
+            </div>
+            <div class="exec-subtitle">{cpu_count or '?'} cores • {int(ram_mb / 1024) if isinstance(ram_mb, (int, float)) else '?'} GB RAM • {os_name}</div>
+            """,
             unsafe_allow_html=True,
         )
-        ram_gb = int(ram_mb / 1024) if isinstance(ram_mb, (int, float)) else "?"
-        st.caption(f"{cpu_count or '?'} cores • {ram_gb} GB RAM • {os_name}")
-    with right:
-        _download_button(selected_server)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
 
     insight_title, insight_text = _build_exec_insight(cpu_pct, mem_pct, ple_s, io_stats)
     st.markdown(
-        f"""<div class="insight">
-              <div class="insight-title">🧠 {insight_title}</div>
-              <div class="insight-text">{insight_text}</div>
-            </div>""",
+        f"""
+        <div class="exec-insight">
+          <div class="exec-insight-title">🧠 {insight_title}</div>
+          <div class="exec-insight-text">{insight_text}</div>
+        </div>
+        """,
         unsafe_allow_html=True,
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='hr'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
     cpu_class = _kpi_class_for_pct(cpu_pct, warn_at=65, bad_at=85)
     mem_class = _kpi_class_for_pct(mem_pct, warn_at=65, bad_at=85)
@@ -626,8 +747,8 @@ def render_overview(selected_server: str):
 
     cpu_hint = "CPU headroom OK" if cpu_class == "ok" else ("Elevated CPU load" if cpu_class == "warn" else "CPU at risk")
     mem_hint = "Stable memory use" if mem_class == "ok" else ("Memory trending high" if mem_class == "warn" else "Memory pressure risk")
-    ple_hint = "Healthy cache" if ple_class == "ok" else ("Borderline cache churn" if ple_class == "warn" else "Low PLE (churn)")
-    gp_hint = "No pressure" if grants_class == "ok" else ("Monitor grants" if grants_class == "warn" else "Memory grants backlog")
+    ple_hint = "Healthy cache" if ple_class == "ok" else ("Borderline cache churn" if ple_class == "warn" else "Low PLE")
+    gp_hint = "No pressure" if grants_class == "ok" else ("Monitor grants" if grants_class == "warn" else "Grant backlog")
 
     k1, k2, k3, k4 = st.columns(4)
     with k1:
@@ -639,16 +760,14 @@ def render_overview(selected_server: str):
     with k4:
         st.markdown(_kpi_tile_html("Grants Pending", _fmt_int(grants_pending), gp_hint, grants_class), unsafe_allow_html=True)
 
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
-    # _render_ai_assistant(selected_server, selected_ingestion_date)
-
-    st.markdown("#### Performance & Bottlenecks")
-    colA, colB = st.columns([1.1, 1.0])
+    st.markdown('<div class="section-heading">Performance & Bottlenecks</div>', unsafe_allow_html=True)
+    colA, colB = st.columns([1.1, 1.0], gap="medium")
 
     with colA:
-        st.markdown("<div class='panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='panel-title'> Workload (Top Queries)</div>", unsafe_allow_html=True)
+        st.markdown('<div class="metric-panel">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-block-title">Workload (Top Queries)</div>', unsafe_allow_html=True)
         w1, w2, w3 = st.columns(3)
         w1.metric("Top Queries", _fmt_int(workload.get("top_query_count")))
         w2.metric(
@@ -660,10 +779,10 @@ def render_overview(selected_server: str):
         w3.metric("Max Reads", _fmt_int(workload.get("max_logical_reads")))
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-        st.markdown("<div class='panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='panel-title'>⏳ Waits Breakdown</div>", unsafe_allow_html=True)
+        st.markdown('<div class="metric-panel">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-block-title">⏳ Waits Breakdown</div>', unsafe_allow_html=True)
         if isinstance(waits_df, pd.DataFrame) and not waits_df.empty:
             _render_waits_table(waits_df)
         else:
@@ -671,8 +790,8 @@ def render_overview(selected_server: str):
         st.markdown("</div>", unsafe_allow_html=True)
 
     with colB:
-        st.markdown("<div class='panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='panel-title'>I/O Stats</div>", unsafe_allow_html=True)
+        st.markdown('<div class="metric-panel">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-block-title">I/O Stats</div>', unsafe_allow_html=True)
 
         i1, i2 = st.columns(2)
         i1.metric(
@@ -710,25 +829,16 @@ def render_overview(selected_server: str):
         i4.metric("Total I/O", total_val)
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-        st.markdown("#### System Configuration")
-        st.markdown("<div class='panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='panel-title'>⚙ Configuration</div>", unsafe_allow_html=True)
+        st.markdown('<div class="metric-panel">', unsafe_allow_html=True)
+        st.markdown('<div class="metric-block-title">⚙ Configuration</div>', unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         c1.metric("MaxDOP", _fmt_int(conf.get("maxdop")))
         c2.metric("Cost Th.", _fmt_int(conf.get("cost_threshold")))
         c3.metric("Max Mem", _mb_to_gb(conf.get("max_server_memory_mb")))
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # st.caption("Source: Latest ingested weekly SQL diagnostics workbook")
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
-    # =====================================
-    # AI Server Assistant (Deep Analysis)
-    # =====================================
     _render_ai_assistant(selected_server, selected_ingestion_date)
-
-    st.caption("Source: Latest ingested weekly SQL diagnostics workbook")
-    
-    

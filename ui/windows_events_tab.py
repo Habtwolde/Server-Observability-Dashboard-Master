@@ -56,7 +56,7 @@ _OVERLAY_CSS = """<style>
 
 def render_windows_events_tab(server_name: str) -> None:
     st.markdown("## Windows & Operational Events")
-    st.caption("Event Viewer-style view synthesized from SQL Agent Alerts and performance telemetry (latest snapshot).")
+    st.caption("Event Viewer-style view from the uploaded Windows Events CSV, filtered by selected server.")
 
     # Inject CSS once
     if not st.session_state.get("_we_overlay_css", False):
@@ -84,25 +84,17 @@ def render_windows_events_tab(server_name: str) -> None:
         overlay.empty()
 
     with st.expander("Filters", expanded=True):
-        col1, col2, col3, col4 = st.columns([1.2, 1.2, 1.0, 1.0])
+        col1, col2, col3 = st.columns([1.2, 1.0, 1.2])
         with col1:
-            category = st.selectbox("Category", ["All", "Alerts", "Performance"], index=0)
+            level = st.selectbox("Level", ["All", "Error", "Warning", "Information", "Info"], index=0)
         with col2:
-            level = st.selectbox("Level", ["All", "Error", "Warning", "Info"], index=0)
+            rows = st.selectbox("Rows", [25, 50, 100, 250], index=1)
         with col3:
-            rows = st.selectbox("Rows", [25, 50, 100, 250], index=0)
-        with col4:
-            keyword = st.text_input("Search", placeholder="provider / message / id ...")
+            keyword = st.text_input("Search", placeholder="provider / message / event id ...")
 
-    with st.expander("Detection thresholds (optional)", expanded=False):
-        c1, c2 = st.columns(2)
-        with c1:
-            cpu_warning = st.number_input("CPU Warning ≥", min_value=0.0, max_value=100.0, value=85.0, step=1.0)
-        with c2:
-            cpu_critical = st.number_input("CPU Critical ≥", min_value=0.0, max_value=100.0, value=95.0, step=1.0)
 
-    thresholds = EventThresholds(cpu_warning=float(cpu_warning), cpu_critical=float(cpu_critical))
-
+    thresholds = EventThresholds()
+    
     # Load events (latest snapshot) with a visible overlay loader
     _show_overlay("Loading Windows Events", "Querying Delta (latest snapshot)…")
     try:
@@ -129,12 +121,6 @@ def render_windows_events_tab(server_name: str) -> None:
 
     df = events_df.copy()
 
-    if category != "All":
-        if category == "Alerts":
-            df = df[df["source_sheet"].astype(str).str.contains("Agent Alerts", case=False, na=False)]
-        elif category == "Performance":
-            df = df[df["source_sheet"].astype(str).str.contains("CPU Utilization History", case=False, na=False)]
-
     if level != "All":
         df = df[df["level"] == level]
 
@@ -147,7 +133,7 @@ def render_windows_events_tab(server_name: str) -> None:
         )
         df = df[mask]
 
-    show_cols = ["time_created", "level", "provider", "id", "message", "source_sheet"]
+    show_cols = ["time_created", "level", "provider", "id", "message"]
     show_cols = [c for c in show_cols if c in df.columns]
     st.dataframe(df[show_cols].head(int(rows)), use_container_width=True, hide_index=True)
 
